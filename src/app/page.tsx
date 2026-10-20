@@ -8,13 +8,14 @@ import {
   Search,
   RefreshCw,
   Plus,
+  Check,
   X,
   Radio,
   ArrowDownCircle,
-  Shield,
   EyeOff,
   Settings2,
   Trash2,
+  SlidersHorizontal,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -22,71 +23,109 @@ import { Loader } from "@/components/ui/loader";
 import { useLibrary } from "@/hooks/use-library";
 import { fetchChannelUploads, searchVideosPage, PIPED_INSTANCES } from "@/lib/api/client";
 import { VideoCard } from "@/components/video/video-card";
+import {
+  DIRECTORY_CATEGORIES,
+  getChannelsByCategory,
+  type DirectoryCategory,
+  type CuratedChannel,
+} from "@/lib/directory/channels";
 import type { VideoMetadata } from "@/types/library";
-
-// Handcrafted educational starter channels
-const STARTER_CHANNELS = [
-  { id: "UCYO_jab_esuFRV4b17AJtAw", name: "3Blue1Brown", handle: "@3blue1brown" },
-  { id: "UCHnyfMqiRRG1u-2MsSQLbXA", name: "Veritasium", handle: "@veritasium" },
-  { id: "UCsBjURrPoezykLs9EqgamOA", name: "Fireship", handle: "@fireship" },
-  { id: "UC9-y-6csu5WGm29I7JiwpnA", name: "Computerphile", handle: "@computerphile" },
-];
 
 export default function HomePage() {
   const { markedChannels, markChannel, unmarkChannel, isReady, savedVideos } = useLibrary();
 
+  // Active category: defaults to "ai-research" or "all" so visitors NEVER see an empty dead screen
+  const [activeTab, setActiveTab] = useState<string>("ai-research");
   const [videos, setVideos] = useState<VideoMetadata[]>([]);
   const [loading, setLoading] = useState(false);
+
+  // Search state
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<VideoMetadata[]>([]);
   const [searchNextPage, setSearchNextPage] = useState<string | undefined>(undefined);
   const [searching, setSearching] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [selectedChannelId, setSelectedChannelId] = useState<string | "all">("all");
-  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
-  // Focus Mode: Vanishes the feed for zero distractions
+  // Focus Mode & Modals
   const [focusMode, setFocusMode] = useState(false);
   const [showChannelModal, setShowChannelModal] = useState(false);
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadMoreTriggerRef = useRef<HTMLDivElement | null>(null);
 
-  // 1. Fetch recent uploads concurrently across all marked channels
-  const loadFeed = async () => {
-    if (markedChannels.length === 0) {
-      setVideos([]);
-      return;
-    }
+  // Get curated channels for currently selected category
+  const categoryChannels = useMemo(() => {
+    return getChannelsByCategory(activeTab);
+  }, [activeTab]);
 
+  // Load feed based on active tab
+  const loadCategoryFeed = useCallback(async () => {
     setLoading(true);
+    setVideos([]);
+
     try {
-      const results = await Promise.allSettled(
-        markedChannels.map((ch) => fetchChannelUploads(ch.channelId))
-      );
-
-      const allVideos: VideoMetadata[] = [];
-      for (const res of results) {
-        if (res.status === "fulfilled") {
-          allVideos.push(...res.value);
+      if (activeTab === "my-feed") {
+        if (markedChannels.length === 0) {
+          setVideos([]);
+          setLoading(false);
+          return;
         }
-      }
 
-      setVideos(allVideos);
+        const results = await Promise.allSettled(
+          markedChannels.map((ch) => fetchChannelUploads(ch.channelId))
+        );
+
+        const all: VideoMetadata[] = [];
+        for (const res of results) {
+          if (res.status === "fulfilled") all.push(...res.value);
+        }
+        setVideos(all);
+      } else {
+        // Fetch from the top curated channels in this category
+        const channelsToFetch = categoryChannels.slice(0, 5);
+        const results = await Promise.allSettled(
+          channelsToFetch.map((ch) => fetchChannelUploads(ch.id))
+        );
+
+        const all: VideoMetadata[] = [];
+        for (const res of results) {
+          if (res.status === "fulfilled") all.push(...res.value);
+        }
+
+        // If specific channel API was slow, supplement with category search query
+        if (all.length < 6) {
+          const cat = DIRECTORY_CATEGORIES.find((c) => c.id === activeTab);
+          if (cat) {
+            const searchFallback = await searchVideosPage(cat.seedQuery);
+            all.push(...searchFallback.videos);
+          }
+        }
+
+        // Deduplicate videos by ID
+        const seen = new Set<string>();
+        const unique = all.filter((v) => {
+          if (seen.has(v.id)) return false;
+          seen.add(v.id);
+          return true;
+        });
+
+        setVideos(unique);
+      }
     } catch (err) {
       console.error("Feed error:", err);
     } finally {
       setLoading(false);
     }
-  };
+  }, [activeTab, markedChannels, categoryChannels]);
 
   useEffect(() => {
-    if (isReady && markedChannels.length > 0) {
-      loadFeed();
+    if (isReady) {
+      loadCategoryFeed();
     }
-  }, [isReady, markedChannels.length]);
+  }, [isReady, activeTab, loadCategoryFeed]);
 
-  // 2. Direct Search via Piped with Endless Pagination
+  // Direct Search
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
@@ -106,7 +145,7 @@ export default function HomePage() {
     }
   };
 
-  // 3. Load More Search Results (Endless Scrolling)
+  // Load More Search Results (Endless Scrolling)
   const loadMoreSearchResults = useCallback(async () => {
     if (!searchNextPage || loadingMore || searching) return;
 
@@ -122,10 +161,9 @@ export default function HomePage() {
     }
   }, [searchNextPage, loadingMore, searching, searchQuery]);
 
-  // Auto-fetch next page as user scrolls near bottom
+  // Auto-fetch on scroll
   useEffect(() => {
     if (!loadMoreTriggerRef.current) return;
-
     if (observerRef.current) observerRef.current.disconnect();
 
     observerRef.current = new IntersectionObserver(
@@ -138,21 +176,25 @@ export default function HomePage() {
     );
 
     observerRef.current.observe(loadMoreTriggerRef.current);
-
     return () => {
       if (observerRef.current) observerRef.current.disconnect();
     };
   }, [searchNextPage, loadingMore, loadMoreSearchResults]);
 
-  // Filter feed by currently selected channel pill
-  const filteredVideos = useMemo(() => {
-    if (selectedChannelId === "all") return videos;
-    return videos.filter((v) => v.channelId === selectedChannelId);
-  }, [videos, selectedChannelId]);
+  // Bulk follow all channels in the current category
+  const handleFollowCategory = async () => {
+    for (const ch of categoryChannels) {
+      await markChannel({
+        channelId: ch.id,
+        channelTitle: ch.name,
+        markedAt: Date.now(),
+      });
+    }
+  };
 
   return (
     <div className="relative min-h-screen bg-[#0e0f12] text-neutral-100 flex flex-col font-sans selection:bg-neutral-800 selection:text-white overflow-x-hidden">
-      {/* Subtle Monochrome Ambient Grid */}
+      {/* Subtle Monochrome Grid */}
       <div className="fixed inset-0 pointer-events-none z-0">
         <div className="absolute inset-0 bg-[radial-gradient(rgba(255,255,255,0.03)_1px,transparent_1px)] [background-size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)]" />
       </div>
@@ -176,8 +218,8 @@ export default function HomePage() {
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search channels, videos or topics..."
-                className="w-full pl-9 pr-14 py-2 text-xs rounded-lg bg-neutral-950 border border-neutral-800 focus:outline-none focus:border-neutral-500 focus:ring-1 focus:ring-neutral-500 text-white placeholder:text-neutral-500 transition-all font-normal"
+                placeholder="Search tech channels, research papers, topics..."
+                className="w-full pl-9 pr-14 py-2 text-xs rounded-lg bg-[#16171b] border border-neutral-800 focus:outline-none focus:border-neutral-500 text-white placeholder:text-neutral-500 transition-all font-normal"
               />
               {searchQuery && (
                 <button
@@ -204,7 +246,7 @@ export default function HomePage() {
               className={`gap-1.5 text-xs rounded-lg h-8 px-2.5 font-medium transition-colors ${
                 focusMode
                   ? "bg-neutral-800 text-white border border-neutral-700"
-                  : "text-neutral-400 hover:text-white hover:bg-neutral-950"
+                  : "text-neutral-400 hover:text-white hover:bg-neutral-900"
               }`}
             >
               <EyeOff className="w-3.5 h-3.5" />
@@ -216,19 +258,19 @@ export default function HomePage() {
               variant="ghost"
               size="sm"
               onClick={() => setShowChannelModal(true)}
-              className="text-neutral-400 hover:text-white hover:bg-neutral-950 rounded-lg gap-1.5 text-xs h-8 px-2.5 font-medium"
-              title="Subscriptions"
+              className="text-neutral-400 hover:text-white hover:bg-neutral-900 rounded-lg gap-1.5 text-xs h-8 px-2.5 font-medium"
+              title="My Subscriptions"
             >
               <Settings2 className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Channels ({markedChannels.length})</span>
+              <span className="hidden md:inline">Subscriptions ({markedChannels.length})</span>
             </Button>
 
             <Button
               variant="ghost"
               size="sm"
-              onClick={loadFeed}
-              disabled={loading || markedChannels.length === 0}
-              className="text-neutral-400 hover:text-white hover:bg-neutral-950 rounded-lg gap-1.5 text-xs h-8 px-2 font-medium"
+              onClick={loadCategoryFeed}
+              disabled={loading}
+              className="text-neutral-400 hover:text-white hover:bg-neutral-900 rounded-lg gap-1.5 text-xs h-8 px-2 font-medium"
               title="Refresh"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin text-white" : ""}`} />
@@ -238,7 +280,7 @@ export default function HomePage() {
               <Button
                 variant="outline"
                 size="sm"
-                className="bg-neutral-950 border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700 text-white rounded-lg gap-1.5 text-xs h-8 px-3 font-medium"
+                className="bg-[#16171b] border-neutral-800 hover:bg-neutral-800 hover:border-neutral-700 text-white rounded-lg gap-1.5 text-xs h-8 px-3 font-medium"
               >
                 <Bookmark className="w-3 h-3 text-neutral-400" />
                 <span>Saved</span>
@@ -256,7 +298,7 @@ export default function HomePage() {
       {/* Main Container */}
       <main className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-10 py-6 sm:py-8">
         
-        {/* Search Results Display with Endless Scrolling */}
+        {/* Search Results Display */}
         {searchResults.length > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
@@ -286,21 +328,16 @@ export default function HomePage() {
               </Button>
             </div>
 
-            {/* Video Cards Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {searchResults.map((video) => (
                 <VideoCard key={video.id} video={video} />
               ))}
             </div>
 
-            {/* Infinite Scroll Trigger & Indicator */}
             {searchNextPage && (
-              <div
-                ref={loadMoreTriggerRef}
-                className="flex items-center justify-center py-10 mt-6"
-              >
+              <div ref={loadMoreTriggerRef} className="flex items-center justify-center py-10 mt-6">
                 {loadingMore ? (
-                  <div className="flex items-center gap-2 text-xs text-neutral-400 font-medium bg-neutral-950 border border-neutral-800 px-4 py-2 rounded-lg">
+                  <div className="flex items-center gap-2 text-xs text-neutral-400 font-medium bg-[#16171b] border border-neutral-800 px-4 py-2 rounded-lg">
                     <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" />
                     <span>Loading more...</span>
                   </div>
@@ -308,7 +345,7 @@ export default function HomePage() {
                   <Button
                     variant="outline"
                     onClick={loadMoreSearchResults}
-                    className="gap-2 text-xs bg-neutral-950 border-neutral-800 hover:bg-neutral-900 text-white font-medium px-4 py-2 rounded-lg"
+                    className="gap-2 text-xs bg-[#16171b] border-neutral-800 hover:bg-neutral-800 text-white font-medium px-4 py-2 rounded-lg"
                   >
                     <ArrowDownCircle className="w-3.5 h-3.5 text-neutral-400" />
                     <span>Load More</span>
@@ -321,7 +358,7 @@ export default function HomePage() {
 
         {/* Focus Mode: Vanish the entire feed */}
         {focusMode ? (
-          <div className="max-w-md mx-auto my-24 p-8 rounded-xl bg-neutral-950 border border-neutral-900 text-center">
+          <div className="max-w-md mx-auto my-24 p-8 rounded-xl bg-[#16171b] border border-neutral-800 text-center">
             <h2 className="text-sm font-bold tracking-wider uppercase text-white mb-2">Focus Mode Active</h2>
             <p className="text-xs text-neutral-400 mb-6 leading-relaxed">
               Feed is vanished. Use the search bar above to look up specific videos or creators.
@@ -336,152 +373,128 @@ export default function HomePage() {
             </Button>
           </div>
         ) : (
-          /* Normal Feed Mode */
-          markedChannels.length === 0 ? (
-            /* Empty State: Clean Monochrome Channels */
-            <div className="max-w-xl mx-auto my-14 p-6 sm:p-8 rounded-xl bg-neutral-950 border border-neutral-900 text-left">
-              <div className="text-xs font-bold tracking-wider text-neutral-300 uppercase mb-1">
-                Your Feed is Empty
-              </div>
-              <p className="text-xs text-neutral-500 mb-6 leading-relaxed">
-                RawTube displays videos only from channels you choose. Add channels below or search above.
-              </p>
+          /* Normal Active Feed: Never Dead! */
+          <div>
+            {/* Category Navigation Bar */}
+            <div className="flex items-center gap-2 mb-6 pb-2 border-b border-neutral-800/80 overflow-x-auto no-scrollbar">
+              {/* My Personal Feed Tab */}
+              <button
+                onClick={() => setActiveTab("my-feed")}
+                className={`text-xs px-3.5 py-1.5 rounded-md transition-colors font-semibold shrink-0 ${
+                  activeTab === "my-feed"
+                    ? "bg-white text-black shadow-sm"
+                    : "text-neutral-400 hover:text-white bg-[#16171b] border border-neutral-800/80"
+                }`}
+              >
+                My Feed ({markedChannels.length})
+              </button>
 
-              <div className="space-y-2 mb-6">
-                {STARTER_CHANNELS.map((ch) => (
-                  <div
-                    key={ch.id}
-                    className="flex items-center justify-between p-3 rounded-lg bg-black border border-neutral-800/80 hover:border-neutral-700 transition-colors"
+              {/* Curated Category Tabs */}
+              {DIRECTORY_CATEGORIES.map((cat) => (
+                <button
+                  key={cat.id}
+                  onClick={() => setActiveTab(cat.id)}
+                  className={`text-xs px-3 py-1.5 rounded-md transition-colors font-medium shrink-0 ${
+                    activeTab === cat.id
+                      ? "bg-white text-black shadow-sm font-semibold"
+                      : "text-neutral-400 hover:text-white hover:bg-[#16171b]"
+                  }`}
+                >
+                  {cat.label}
+                </button>
+              ))}
+            </div>
+
+            {/* Category Header & Follow Controls */}
+            {activeTab !== "my-feed" && (
+              <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-[#16171b] border border-neutral-800/80">
+                <div>
+                  <h1 className="text-sm font-bold text-white tracking-tight uppercase font-mono">
+                    {DIRECTORY_CATEGORIES.find((c) => c.id === activeTab)?.label}
+                  </h1>
+                  <p className="text-xs text-neutral-400 mt-0.5">
+                    {DIRECTORY_CATEGORIES.find((c) => c.id === activeTab)?.description}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleFollowCategory}
+                    className="h-7 text-xs bg-black border-neutral-800 hover:bg-neutral-900 text-white rounded-md gap-1 font-medium"
+                    title="Add all channels in this category to your subscriptions"
                   >
-                    <div>
-                      <div className="font-semibold text-xs text-white">
-                        {ch.name}
-                      </div>
-                      <div className="text-[11px] text-neutral-500 font-mono">{ch.handle}</div>
-                    </div>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        markChannel({
-                          channelId: ch.id,
-                          channelTitle: ch.name,
-                          markedAt: Date.now(),
-                        })
-                      }
-                      className="h-7 px-2.5 text-xs bg-neutral-900 border-neutral-800 hover:bg-neutral-800 text-white rounded-md gap-1"
-                    >
-                      <Plus className="w-3 h-3 text-neutral-400" />
-                      <span>Add</span>
-                    </Button>
+                    <Plus className="w-3 h-3 text-neutral-400" />
+                    <span>Follow All ({categoryChannels.length})</span>
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Video Cards Grid */}
+            {loading ? (
+              <div className="flex flex-col items-center justify-center py-20">
+                <Loader size={100} />
+              </div>
+            ) : videos.length > 0 ? (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                {videos.map((video, idx) => (
+                  <div
+                    key={video.id}
+                    className="relative group block p-0.5"
+                    onMouseEnter={() => setHoveredIndex(idx)}
+                    onMouseLeave={() => setHoveredIndex(null)}
+                  >
+                    <AnimatePresence>
+                      {hoveredIndex === idx && (
+                        <motion.span
+                          className="absolute inset-0 h-full w-full bg-neutral-900/60 block rounded-xl -z-10"
+                          layoutId="hoverBackground"
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1, transition: { duration: 0.15 } }}
+                          exit={{ opacity: 0, transition: { duration: 0.15, delay: 0.05 } }}
+                        />
+                      )}
+                    </AnimatePresence>
+
+                    <VideoCard video={video} />
                   </div>
                 ))}
               </div>
-
-              <div className="text-[11px] text-neutral-600 font-mono text-center">
-                Search for any creator or topic using the top search bar
-              </div>
-            </div>
-          ) : (
-            /* Populated Chronological Feed */
-            <div>
-              {/* Channel Filter Pill Bar with 1-Click [✕] Remove Button */}
-              <div className="flex items-center justify-between gap-4 mb-6 pb-2 border-b border-neutral-900 overflow-x-auto no-scrollbar">
-                <div className="flex items-center gap-1.5">
-                  <button
-                    onClick={() => setSelectedChannelId("all")}
-                    className={`text-xs px-3 py-1.5 rounded-md transition-colors font-semibold ${
-                      selectedChannelId === "all"
-                        ? "bg-white text-black shadow-sm"
-                        : "text-neutral-400 hover:text-white hover:bg-neutral-950"
-                    }`}
-                  >
-                    All ({videos.length})
-                  </button>
-
-                  {markedChannels.map((ch) => (
-                    <div
-                      key={ch.channelId}
-                      className={`flex items-center gap-1.5 text-xs pl-2.5 pr-1.5 py-1 rounded-md transition-colors truncate max-w-[170px] ${
-                        selectedChannelId === ch.channelId
-                          ? "bg-white text-black font-semibold"
-                          : "text-neutral-300 bg-neutral-950 border border-neutral-800"
-                      }`}
+            ) : (
+              /* Empty state only if My Feed is truly empty */
+              <div className="py-20 text-center text-neutral-500 text-xs max-w-sm mx-auto">
+                {activeTab === "my-feed" ? (
+                  <div>
+                    <p className="text-sm font-semibold text-neutral-300 mb-1">Your Personal Feed is Empty</p>
+                    <p className="text-xs text-neutral-500 mb-4">
+                      Explore the categories above like AI Research, Web3 or Robotics, and click Follow on creators!
+                    </p>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setActiveTab("ai-research")}
+                      className="text-xs bg-[#16171b] border-neutral-800 text-white"
                     >
-                      <button
-                        onClick={() => setSelectedChannelId(ch.channelId)}
-                        className="truncate text-left"
-                        title={ch.channelTitle}
-                      >
-                        {ch.channelTitle}
-                      </button>
-                      <button
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          unmarkChannel(ch.channelId);
-                          if (selectedChannelId === ch.channelId) setSelectedChannelId("all");
-                        }}
-                        title={`Remove ${ch.channelTitle}`}
-                        className="p-0.5 rounded hover:bg-neutral-800 hover:text-white text-neutral-500 transition-colors"
-                      >
-                        <X className="w-3 h-3" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="text-[11px] text-neutral-500 shrink-0 hidden md:flex items-center gap-1.5 font-mono">
-                  <Radio className="w-3 h-3 text-neutral-400" />
-                  <span>{PIPED_INSTANCES[0].replace("https://", "")}</span>
-                </div>
+                      Browse AI Research
+                    </Button>
+                  </div>
+                ) : (
+                  <p>No recent uploads found. Refresh or try another category.</p>
+                )}
               </div>
-
-              {/* Video Cards Grid */}
-              {loading ? (
-                <div className="flex flex-col items-center justify-center py-20">
-                  <Loader size={100} />
-                </div>
-              ) : filteredVideos.length > 0 ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                  {filteredVideos.map((video, idx) => (
-                    <div
-                      key={video.id}
-                      className="relative group block p-0.5"
-                      onMouseEnter={() => setHoveredIndex(idx)}
-                      onMouseLeave={() => setHoveredIndex(null)}
-                    >
-                      <AnimatePresence>
-                        {hoveredIndex === idx && (
-                          <motion.span
-                            className="absolute inset-0 h-full w-full bg-neutral-900/60 block rounded-xl -z-10"
-                            layoutId="hoverBackground"
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1, transition: { duration: 0.15 } }}
-                            exit={{ opacity: 0, transition: { duration: 0.15, delay: 0.05 } }}
-                          />
-                        )}
-                      </AnimatePresence>
-
-                      <VideoCard video={video} />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="py-20 text-center text-neutral-500 text-xs">
-                  No uploads found for selected channels.
-                </div>
-              )}
-            </div>
-          )
+            )}
+          </div>
         )}
       </main>
 
-      {/* Channel Management Modal */}
+      {/* Subscriptions Management Modal */}
       {showChannelModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-          <div className="bg-neutral-950 border border-neutral-800 rounded-xl max-w-md w-full p-6 shadow-2xl">
+          <div className="bg-[#16171b] border border-neutral-800 rounded-xl max-w-md w-full p-6 shadow-2xl">
             <div className="flex items-center justify-between pb-4 border-b border-neutral-800 mb-4">
-              <h2 className="text-xs font-bold tracking-wider uppercase text-white">Subscriptions</h2>
+              <h2 className="text-xs font-bold tracking-wider uppercase text-white font-mono">My Subscriptions</h2>
               <button
                 onClick={() => setShowChannelModal(false)}
                 className="text-neutral-500 hover:text-white p-1"
@@ -491,7 +504,7 @@ export default function HomePage() {
             </div>
 
             {markedChannels.length === 0 ? (
-              <p className="text-xs text-neutral-500 py-6 text-center font-mono">No channels added yet.</p>
+              <p className="text-xs text-neutral-500 py-6 text-center font-mono">No channels subscribed yet.</p>
             ) : (
               <div className="flex flex-col gap-2 max-h-80 overflow-y-auto pr-1">
                 {markedChannels.map((ch) => (
@@ -505,10 +518,7 @@ export default function HomePage() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => {
-                        unmarkChannel(ch.channelId);
-                        if (selectedChannelId === ch.channelId) setSelectedChannelId("all");
-                      }}
+                      onClick={() => unmarkChannel(ch.channelId)}
                       className="text-neutral-400 hover:text-white hover:bg-neutral-900 h-7 px-2 text-xs gap-1"
                     >
                       <Trash2 className="w-3 h-3" />
@@ -534,11 +544,11 @@ export default function HomePage() {
       )}
 
       {/* Minimalist Monochrome Footer */}
-      <footer className="mt-auto border-t border-neutral-900 py-4 px-6 text-center text-xs text-neutral-500">
+      <footer className="mt-auto border-t border-neutral-800/60 py-4 px-6 text-center text-xs text-neutral-500 bg-[#0e0f12]">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 font-mono text-[11px]">
-          <span>RAWTUBE · LOCAL-FIRST</span>
+          <span>RAWTUBE · LOCAL-FIRST INTELLIGENCE</span>
           <span>
-            {markedChannels.length} Channels · {savedVideos.length} Saved
+            {markedChannels.length} Channels Followed · {savedVideos.length} Saved
           </span>
         </div>
       </footer>
