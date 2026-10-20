@@ -4,16 +4,17 @@ import { useEffect, useState, useMemo, useRef, useCallback } from "react";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import {
-  Tv2,
   Bookmark,
   Search,
   RefreshCw,
-  PlusCircle,
-  Sparkles,
-  ShieldCheck,
+  Plus,
   X,
   Radio,
   ArrowDownCircle,
+  Shield,
+  EyeOff,
+  Settings2,
+  Trash2,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -23,7 +24,7 @@ import { fetchChannelUploads, searchVideosPage, PIPED_INSTANCES } from "@/lib/ap
 import { VideoCard } from "@/components/video/video-card";
 import type { VideoMetadata } from "@/types/library";
 
-// Handcrafted educational starter channels for 1-click onboarding
+// Handcrafted educational starter channels
 const STARTER_CHANNELS = [
   { id: "UCYO_jab_esuFRV4b17AJtAw", name: "3Blue1Brown", handle: "@3blue1brown" },
   { id: "UCHnyfMqiRRG1u-2MsSQLbXA", name: "Veritasium", handle: "@veritasium" },
@@ -32,7 +33,7 @@ const STARTER_CHANNELS = [
 ];
 
 export default function HomePage() {
-  const { markedChannels, markChannel, isReady, savedVideos } = useLibrary();
+  const { markedChannels, markChannel, unmarkChannel, isReady, savedVideos } = useLibrary();
 
   const [videos, setVideos] = useState<VideoMetadata[]>([]);
   const [loading, setLoading] = useState(false);
@@ -43,6 +44,10 @@ export default function HomePage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const [selectedChannelId, setSelectedChannelId] = useState<string | "all">("all");
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+
+  // Focus Mode: Vanishes the feed for zero distractions
+  const [focusMode, setFocusMode] = useState(false);
+  const [showChannelModal, setShowChannelModal] = useState(false);
 
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadMoreTriggerRef = useRef<HTMLDivElement | null>(null);
@@ -146,76 +151,99 @@ export default function HomePage() {
   }, [videos, selectedChannelId]);
 
   return (
-    <div className="relative min-h-screen bg-neutral-950 text-neutral-100 flex flex-col font-sans selection:bg-neutral-800 selection:text-white overflow-x-hidden">
-      {/* Aceternity-inspired Ambient Background Mesh */}
+    <div className="relative min-h-screen bg-[#0e0f12] text-neutral-100 flex flex-col font-sans selection:bg-neutral-800 selection:text-white overflow-x-hidden">
+      {/* Subtle Monochrome Ambient Grid */}
       <div className="fixed inset-0 pointer-events-none z-0">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[1000px] h-[350px] bg-gradient-to-b from-red-600/[0.08] via-neutral-900/[0.02] to-transparent blur-3xl opacity-80" />
-        <div className="absolute inset-0 bg-[radial-gradient(rgba(255,255,255,0.04)_1px,transparent_1px)] [background-size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)]" />
+        <div className="absolute inset-0 bg-[radial-gradient(rgba(255,255,255,0.03)_1px,transparent_1px)] [background-size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)]" />
       </div>
 
       {/* Top Navbar */}
-      <header className="sticky top-0 z-40 bg-neutral-950/85 backdrop-blur-xl border-b border-neutral-800/90 px-4 sm:px-6 lg:px-10 py-3.5 transition-colors">
+      <header className="sticky top-0 z-40 bg-[#0e0f12]/90 backdrop-blur-md border-b border-neutral-800/80 px-4 sm:px-6 lg:px-10 py-3.5 transition-colors">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
           
-          {/* Brand */}
-          <Link href="/" className="flex items-center gap-3 shrink-0 group">
-            <div className="w-9 h-9 rounded-xl bg-neutral-900 border border-neutral-700/80 flex items-center justify-center text-red-500 shadow-inner group-hover:border-red-500/50 transition-colors">
-              <Tv2 className="w-4 h-4" />
-            </div>
-            <span className="font-bold text-base tracking-tight text-white group-hover:text-white transition-colors">
-              RawTube
+          {/* Brand: Pure RAWTUBE Text */}
+          <Link href="/" className="flex items-center shrink-0">
+            <span className="font-black text-sm tracking-[0.25em] text-white hover:text-neutral-300 transition-colors uppercase select-none">
+              RAWTUBE
             </span>
           </Link>
 
-          {/* Aceternity Smooth Search Input */}
+          {/* Search Bar */}
           <form onSubmit={handleSearch} className="flex-1 max-w-lg relative">
             <div className="relative flex items-center">
-              <Search className="w-4 h-4 text-neutral-400 absolute left-3.5 pointer-events-none" />
+              <Search className="w-3.5 h-3.5 text-neutral-500 absolute left-3.5 pointer-events-none" />
               <input
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search videos, channels, or topics..."
-                className="w-full pl-10 pr-16 py-2 text-sm rounded-xl bg-neutral-900 border border-neutral-800 focus:outline-none focus:border-neutral-600 focus:ring-1 focus:ring-neutral-500 text-white placeholder:text-neutral-400 transition-all shadow-sm font-normal"
+                placeholder="Search channels, videos or topics..."
+                className="w-full pl-9 pr-14 py-2 text-xs rounded-lg bg-neutral-950 border border-neutral-800 focus:outline-none focus:border-neutral-500 focus:ring-1 focus:ring-neutral-500 text-white placeholder:text-neutral-500 transition-all font-normal"
               />
               {searchQuery && (
                 <button
                   type="button"
                   onClick={() => setSearchQuery("")}
-                  className="absolute right-9 text-neutral-400 hover:text-white p-1"
+                  className="absolute right-8 text-neutral-500 hover:text-white p-1"
                 >
-                  <X className="w-3.5 h-3.5" />
+                  <X className="w-3 h-3" />
                 </button>
               )}
-              <span className="absolute right-3 text-[10px] font-mono text-neutral-400 bg-neutral-800 px-1.5 py-0.5 rounded border border-neutral-700 pointer-events-none">
+              <span className="absolute right-2.5 text-[9px] font-mono text-neutral-500 bg-neutral-900 px-1 py-0.5 rounded border border-neutral-800 pointer-events-none">
                 ↵
               </span>
             </div>
           </form>
 
-          {/* Action Buttons using shadcn Button */}
+          {/* Action Buttons */}
           <div className="flex items-center gap-2">
+            {/* Focus Mode (Vanish Feed) Toggle */}
+            <Button
+              variant={focusMode ? "secondary" : "ghost"}
+              size="sm"
+              onClick={() => setFocusMode(!focusMode)}
+              className={`gap-1.5 text-xs rounded-lg h-8 px-2.5 font-medium transition-colors ${
+                focusMode
+                  ? "bg-neutral-800 text-white border border-neutral-700"
+                  : "text-neutral-400 hover:text-white hover:bg-neutral-950"
+              }`}
+            >
+              <EyeOff className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">{focusMode ? "Focus: ON" : "Focus"}</span>
+            </Button>
+
+            {/* Manage Channels Button */}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowChannelModal(true)}
+              className="text-neutral-400 hover:text-white hover:bg-neutral-950 rounded-lg gap-1.5 text-xs h-8 px-2.5 font-medium"
+              title="Subscriptions"
+            >
+              <Settings2 className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Channels ({markedChannels.length})</span>
+            </Button>
+
             <Button
               variant="ghost"
               size="sm"
               onClick={loadFeed}
               disabled={loading || markedChannels.length === 0}
-              className="text-neutral-300 hover:text-white hover:bg-neutral-900 rounded-xl gap-1.5 text-xs h-8 px-2.5 font-medium"
+              className="text-neutral-400 hover:text-white hover:bg-neutral-950 rounded-lg gap-1.5 text-xs h-8 px-2 font-medium"
+              title="Refresh"
             >
-              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin text-red-400" : ""}`} />
-              <span className="hidden sm:inline">Refresh</span>
+              <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin text-white" : ""}`} />
             </Button>
 
             <Link href="/watch-later">
               <Button
                 variant="outline"
                 size="sm"
-                className="bg-neutral-900 border-neutral-800 hover:bg-neutral-800 hover:border-neutral-700 text-white rounded-xl gap-2 text-xs h-8 px-3 shadow-sm font-medium"
+                className="bg-neutral-950 border-neutral-800 hover:bg-neutral-900 hover:border-neutral-700 text-white rounded-lg gap-1.5 text-xs h-8 px-3 font-medium"
               >
-                <Bookmark className="w-3.5 h-3.5 text-neutral-300" />
-                <span>Watch Later</span>
+                <Bookmark className="w-3 h-3 text-neutral-400" />
+                <span>Saved</span>
                 {savedVideos.length > 0 && (
-                  <span className="px-1.5 py-0.2 bg-neutral-800 text-white rounded text-[11px] font-mono border border-neutral-700 font-semibold">
+                  <span className="px-1.5 py-0.2 bg-neutral-900 text-neutral-300 rounded text-[10px] font-mono border border-neutral-800 font-semibold">
                     {savedVideos.length}
                   </span>
                 )}
@@ -233,16 +261,16 @@ export default function HomePage() {
           <motion.div
             initial={{ opacity: 0, y: 10 }}
             animate={{ opacity: 1, y: 0 }}
-            className="mb-10 pb-8 border-b border-neutral-800/80"
+            className="mb-10 pb-8 border-b border-neutral-900"
           >
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
-                <Search className="w-4 h-4 text-emerald-400" />
-                <h2 className="text-base font-semibold text-white">
-                  Search Results for &ldquo;{searchQuery}&rdquo;
+                <Search className="w-4 h-4 text-neutral-400" />
+                <h2 className="text-sm font-semibold text-white tracking-tight">
+                  Search: {searchQuery}
                 </h2>
-                <span className="text-xs text-neutral-300 font-medium">
-                  ({searchResults.length} videos loaded)
+                <span className="text-xs text-neutral-500 font-mono">
+                  ({searchResults.length})
                 </span>
               </div>
               <Button
@@ -252,9 +280,9 @@ export default function HomePage() {
                   setSearchResults([]);
                   setSearchNextPage(undefined);
                 }}
-                className="text-neutral-300 hover:text-white text-xs h-7 px-2.5 font-medium"
+                className="text-neutral-400 hover:text-white text-xs h-7 px-2 font-medium"
               >
-                Clear Search
+                Clear
               </Button>
             </div>
 
@@ -272,18 +300,18 @@ export default function HomePage() {
                 className="flex items-center justify-center py-10 mt-6"
               >
                 {loadingMore ? (
-                  <div className="flex items-center gap-2 text-sm text-neutral-300 font-medium bg-neutral-900 border border-neutral-800 px-4 py-2 rounded-xl">
-                    <RefreshCw className="w-4 h-4 animate-spin text-emerald-400" />
-                    <span>Loading more videos...</span>
+                  <div className="flex items-center gap-2 text-xs text-neutral-400 font-medium bg-neutral-950 border border-neutral-800 px-4 py-2 rounded-lg">
+                    <RefreshCw className="w-3.5 h-3.5 animate-spin text-white" />
+                    <span>Loading more...</span>
                   </div>
                 ) : (
                   <Button
                     variant="outline"
                     onClick={loadMoreSearchResults}
-                    className="gap-2 text-xs bg-neutral-900 border-neutral-800 hover:bg-neutral-800 text-white font-medium px-4 py-2 rounded-xl"
+                    className="gap-2 text-xs bg-neutral-950 border-neutral-800 hover:bg-neutral-900 text-white font-medium px-4 py-2 rounded-lg"
                   >
-                    <ArrowDownCircle className="w-4 h-4 text-emerald-400" />
-                    <span>Load More Videos</span>
+                    <ArrowDownCircle className="w-3.5 h-3.5 text-neutral-400" />
+                    <span>Load More</span>
                   </Button>
                 )}
               </div>
@@ -291,154 +319,226 @@ export default function HomePage() {
           </motion.div>
         )}
 
-        {/* Normal Feed Mode */}
-        {markedChannels.length === 0 ? (
-          /* Empty State: Sleek, non-AI onboarding card */
-          <motion.div
-            initial={{ opacity: 0, scale: 0.98 }}
-            animate={{ opacity: 1, scale: 1 }}
-            transition={{ duration: 0.2 }}
-            className="max-w-2xl mx-auto my-12 p-8 sm:p-10 rounded-2xl bg-neutral-900/60 border border-neutral-800 backdrop-blur-md text-center shadow-2xl relative overflow-hidden"
-          >
-            <div className="absolute top-0 right-0 -mr-16 -mt-16 w-48 h-48 bg-red-600/10 rounded-full blur-3xl pointer-events-none" />
-
-            <div className="w-12 h-12 mx-auto rounded-2xl bg-neutral-900 border border-neutral-800 flex items-center justify-center text-neutral-300 mb-5 shadow-sm">
-              <ShieldCheck className="w-6 h-6 text-emerald-400" />
-            </div>
-
-            <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight mb-2.5">
-              Distraction-Free Video Feed
-            </h1>
-            <p className="text-sm text-neutral-300 max-w-md mx-auto leading-relaxed mb-8 font-normal">
-              RawTube respects your attention. No algorithmic rabbit holes, no Shorts, and no tracking. You choose exactly which channels appear here.
+        {/* Focus Mode: Vanish the entire feed */}
+        {focusMode ? (
+          <div className="max-w-md mx-auto my-24 p-8 rounded-xl bg-neutral-950 border border-neutral-900 text-center">
+            <h2 className="text-sm font-bold tracking-wider uppercase text-white mb-2">Focus Mode Active</h2>
+            <p className="text-xs text-neutral-400 mb-6 leading-relaxed">
+              Feed is vanished. Use the search bar above to look up specific videos or creators.
             </p>
-
-            <div className="text-left bg-neutral-950 border border-neutral-800/90 rounded-xl p-5 mb-6">
-              <div className="flex items-center justify-between mb-3.5">
-                <span className="text-xs font-semibold text-white flex items-center gap-1.5">
-                  <Sparkles className="w-3.5 h-3.5 text-amber-400" />
-                  Quick-add recommended channels:
-                </span>
-                <span className="text-[11px] text-neutral-400 font-mono font-medium">100% Local</span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setFocusMode(false)}
+              className="bg-black border-neutral-800 hover:bg-neutral-900 text-white text-xs rounded-lg px-3 py-1.5"
+            >
+              Show Feed
+            </Button>
+          </div>
+        ) : (
+          /* Normal Feed Mode */
+          markedChannels.length === 0 ? (
+            /* Empty State: Clean Monochrome Channels */
+            <div className="max-w-xl mx-auto my-14 p-6 sm:p-8 rounded-xl bg-neutral-950 border border-neutral-900 text-left">
+              <div className="text-xs font-bold tracking-wider text-neutral-300 uppercase mb-1">
+                Your Feed is Empty
               </div>
+              <p className="text-xs text-neutral-500 mb-6 leading-relaxed">
+                RawTube displays videos only from channels you choose. Add channels below or search above.
+              </p>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <div className="space-y-2 mb-6">
                 {STARTER_CHANNELS.map((ch) => (
-                  <button
+                  <div
                     key={ch.id}
-                    onClick={() =>
-                      markChannel({
-                        channelId: ch.id,
-                        channelTitle: ch.name,
-                        markedAt: Date.now(),
-                      })
-                    }
-                    className="group/item flex items-center justify-between p-3 rounded-lg bg-neutral-900 hover:bg-neutral-800 border border-neutral-800 hover:border-neutral-700 transition-all text-left"
+                    className="flex items-center justify-between p-3 rounded-lg bg-black border border-neutral-800/80 hover:border-neutral-700 transition-colors"
                   >
                     <div>
-                      <div className="font-semibold text-xs text-neutral-100 group-hover/item:text-white">
+                      <div className="font-semibold text-xs text-white">
                         {ch.name}
                       </div>
-                      <div className="text-[11px] text-neutral-400 font-mono">{ch.handle}</div>
+                      <div className="text-[11px] text-neutral-500 font-mono">{ch.handle}</div>
                     </div>
-                    <PlusCircle className="w-4 h-4 text-neutral-400 group-hover/item:text-emerald-400 transition-colors" />
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div className="text-xs text-neutral-400 flex items-center justify-center gap-1.5 font-medium">
-              <span>Looking for someone else? Type their name or topic in the search bar above</span>
-            </div>
-          </motion.div>
-        ) : (
-          /* Populated Chronological Feed */
-          <div>
-            {/* Channel Filter Pill Bar */}
-            <div className="flex items-center justify-between gap-4 mb-6 pb-2 border-b border-neutral-800 overflow-x-auto no-scrollbar">
-              <div className="flex items-center gap-1.5">
-                <button
-                  onClick={() => setSelectedChannelId("all")}
-                  className={`text-xs px-3.5 py-1.5 rounded-lg transition-colors font-semibold ${
-                    selectedChannelId === "all"
-                      ? "bg-white text-neutral-950 shadow-sm"
-                      : "text-neutral-300 hover:text-white hover:bg-neutral-900"
-                  }`}
-                >
-                  All Channels ({videos.length})
-                </button>
-
-                {markedChannels.map((ch) => (
-                  <button
-                    key={ch.channelId}
-                    onClick={() => setSelectedChannelId(ch.channelId)}
-                    className={`text-xs px-3.5 py-1.5 rounded-lg transition-colors truncate max-w-[150px] font-medium ${
-                      selectedChannelId === ch.channelId
-                        ? "bg-white text-neutral-950 shadow-sm font-semibold"
-                        : "text-neutral-300 hover:text-white hover:bg-neutral-900"
-                    }`}
-                    title={ch.channelTitle}
-                  >
-                    {ch.channelTitle}
-                  </button>
-                ))}
-              </div>
-
-              <div className="text-xs text-neutral-400 shrink-0 hidden md:flex items-center gap-2 font-medium">
-                <Radio className="w-3.5 h-3.5 text-emerald-400 animate-pulse" />
-                <span>Piped Proxy:</span>
-                <span className="font-mono text-[11px] text-neutral-300">
-                  {PIPED_INSTANCES[0].replace("https://", "")}
-                </span>
-              </div>
-            </div>
-
-            {/* Video Cards Grid with Aceternity Card Hover Backdrop */}
-            {loading ? (
-              <div className="flex flex-col items-center justify-center py-20">
-                <Loader size={110} />
-              </div>
-            ) : filteredVideos.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {filteredVideos.map((video, idx) => (
-                  <div
-                    key={video.id}
-                    className="relative group block p-1"
-                    onMouseEnter={() => setHoveredIndex(idx)}
-                    onMouseLeave={() => setHoveredIndex(null)}
-                  >
-                    {/* Aceternity layoutId Hover Gradient Glow */}
-                    <AnimatePresence>
-                      {hoveredIndex === idx && (
-                        <motion.span
-                          className="absolute inset-0 h-full w-full bg-neutral-800/50 block rounded-2xl -z-10"
-                          layoutId="hoverBackground"
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1, transition: { duration: 0.15 } }}
-                          exit={{ opacity: 0, transition: { duration: 0.15, delay: 0.05 } }}
-                        />
-                      )}
-                    </AnimatePresence>
-
-                    <VideoCard video={video} />
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() =>
+                        markChannel({
+                          channelId: ch.id,
+                          channelTitle: ch.name,
+                          markedAt: Date.now(),
+                        })
+                      }
+                      className="h-7 px-2.5 text-xs bg-neutral-900 border-neutral-800 hover:bg-neutral-800 text-white rounded-md gap-1"
+                    >
+                      <Plus className="w-3 h-3 text-neutral-400" />
+                      <span>Add</span>
+                    </Button>
                   </div>
                 ))}
               </div>
-            ) : (
-              <div className="py-20 text-center text-neutral-400 text-xs font-medium">
-                No videos available for this selection.
+
+              <div className="text-[11px] text-neutral-600 font-mono text-center">
+                Search for any creator or topic using the top search bar
               </div>
-            )}
-          </div>
+            </div>
+          ) : (
+            /* Populated Chronological Feed */
+            <div>
+              {/* Channel Filter Pill Bar with 1-Click [✕] Remove Button */}
+              <div className="flex items-center justify-between gap-4 mb-6 pb-2 border-b border-neutral-900 overflow-x-auto no-scrollbar">
+                <div className="flex items-center gap-1.5">
+                  <button
+                    onClick={() => setSelectedChannelId("all")}
+                    className={`text-xs px-3 py-1.5 rounded-md transition-colors font-semibold ${
+                      selectedChannelId === "all"
+                        ? "bg-white text-black shadow-sm"
+                        : "text-neutral-400 hover:text-white hover:bg-neutral-950"
+                    }`}
+                  >
+                    All ({videos.length})
+                  </button>
+
+                  {markedChannels.map((ch) => (
+                    <div
+                      key={ch.channelId}
+                      className={`flex items-center gap-1.5 text-xs pl-2.5 pr-1.5 py-1 rounded-md transition-colors truncate max-w-[170px] ${
+                        selectedChannelId === ch.channelId
+                          ? "bg-white text-black font-semibold"
+                          : "text-neutral-300 bg-neutral-950 border border-neutral-800"
+                      }`}
+                    >
+                      <button
+                        onClick={() => setSelectedChannelId(ch.channelId)}
+                        className="truncate text-left"
+                        title={ch.channelTitle}
+                      >
+                        {ch.channelTitle}
+                      </button>
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          unmarkChannel(ch.channelId);
+                          if (selectedChannelId === ch.channelId) setSelectedChannelId("all");
+                        }}
+                        title={`Remove ${ch.channelTitle}`}
+                        className="p-0.5 rounded hover:bg-neutral-800 hover:text-white text-neutral-500 transition-colors"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="text-[11px] text-neutral-500 shrink-0 hidden md:flex items-center gap-1.5 font-mono">
+                  <Radio className="w-3 h-3 text-neutral-400" />
+                  <span>{PIPED_INSTANCES[0].replace("https://", "")}</span>
+                </div>
+              </div>
+
+              {/* Video Cards Grid */}
+              {loading ? (
+                <div className="flex flex-col items-center justify-center py-20">
+                  <Loader size={100} />
+                </div>
+              ) : filteredVideos.length > 0 ? (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {filteredVideos.map((video, idx) => (
+                    <div
+                      key={video.id}
+                      className="relative group block p-0.5"
+                      onMouseEnter={() => setHoveredIndex(idx)}
+                      onMouseLeave={() => setHoveredIndex(null)}
+                    >
+                      <AnimatePresence>
+                        {hoveredIndex === idx && (
+                          <motion.span
+                            className="absolute inset-0 h-full w-full bg-neutral-900/60 block rounded-xl -z-10"
+                            layoutId="hoverBackground"
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1, transition: { duration: 0.15 } }}
+                            exit={{ opacity: 0, transition: { duration: 0.15, delay: 0.05 } }}
+                          />
+                        )}
+                      </AnimatePresence>
+
+                      <VideoCard video={video} />
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="py-20 text-center text-neutral-500 text-xs">
+                  No uploads found for selected channels.
+                </div>
+              )}
+            </div>
+          )
         )}
       </main>
 
-      {/* Minimalist Local-First Footer */}
-      <footer className="mt-auto border-t border-neutral-800 py-4 px-6 text-center text-xs text-neutral-400">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2">
-          <span className="text-neutral-300 font-medium">RawTube — 100% Client-side · Private · No Tracking</span>
-          <span className="font-mono text-[11px] text-neutral-400">
-            Storage: IndexedDB ({markedChannels.length} channels, {savedVideos.length} bookmarks)
+      {/* Channel Management Modal */}
+      {showChannelModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="bg-neutral-950 border border-neutral-800 rounded-xl max-w-md w-full p-6 shadow-2xl">
+            <div className="flex items-center justify-between pb-4 border-b border-neutral-800 mb-4">
+              <h2 className="text-xs font-bold tracking-wider uppercase text-white">Subscriptions</h2>
+              <button
+                onClick={() => setShowChannelModal(false)}
+                className="text-neutral-500 hover:text-white p-1"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {markedChannels.length === 0 ? (
+              <p className="text-xs text-neutral-500 py-6 text-center font-mono">No channels added yet.</p>
+            ) : (
+              <div className="flex flex-col gap-2 max-h-80 overflow-y-auto pr-1">
+                {markedChannels.map((ch) => (
+                  <div
+                    key={ch.channelId}
+                    className="flex items-center justify-between p-3 rounded-lg bg-black border border-neutral-800/80"
+                  >
+                    <span className="font-medium text-xs text-white truncate mr-2">
+                      {ch.channelTitle}
+                    </span>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        unmarkChannel(ch.channelId);
+                        if (selectedChannelId === ch.channelId) setSelectedChannelId("all");
+                      }}
+                      className="text-neutral-400 hover:text-white hover:bg-neutral-900 h-7 px-2 text-xs gap-1"
+                    >
+                      <Trash2 className="w-3 h-3" />
+                      <span>Remove</span>
+                    </Button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="mt-5 pt-3 border-t border-neutral-800 flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowChannelModal(false)}
+                className="text-xs bg-black border-neutral-800 text-white rounded-md px-3"
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Minimalist Monochrome Footer */}
+      <footer className="mt-auto border-t border-neutral-900 py-4 px-6 text-center text-xs text-neutral-500">
+        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 font-mono text-[11px]">
+          <span>RAWTUBE · LOCAL-FIRST</span>
+          <span>
+            {markedChannels.length} Channels · {savedVideos.length} Saved
           </span>
         </div>
       </footer>

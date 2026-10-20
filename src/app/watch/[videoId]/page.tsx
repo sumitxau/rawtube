@@ -2,29 +2,40 @@
 
 import { useEffect, useState, use } from "react";
 import Link from "next/link";
-import { useParams } from "next/navigation";
 import {
   ArrowLeft,
-  Tv2,
   Bookmark,
   BookmarkCheck,
-  Eye,
-  Calendar,
   Share2,
   Check,
-  Maximize2,
-  Minimize2,
-  PlusCircle,
+  EyeOff,
+  Plus,
   CheckCircle2,
+  MessageSquare,
+  ThumbsUp,
+  Shield,
+  Send,
+  Tv,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Loader } from "@/components/ui/loader";
 import { useLibrary } from "@/hooks/use-library";
-import { fetchVideoDetails, type PipedStreamResponse } from "@/lib/api/client";
+import {
+  fetchVideoDetails,
+  fetchVideoComments,
+  type PipedStreamResponse,
+  type PipedComment,
+} from "@/lib/api/client";
 
 interface PageProps {
   params: Promise<{ videoId: string }>;
+}
+
+interface LocalNote {
+  id: string;
+  text: string;
+  time: number;
 }
 
 export default function WatchPage({ params }: PageProps) {
@@ -44,19 +55,39 @@ export default function WatchPage({ params }: PageProps) {
   const [details, setDetails] = useState<PipedStreamResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [focusMode, setFocusMode] = useState(false);
+  const [theaterMode, setTheaterMode] = useState(false);
   const [copied, setCopied] = useState(false);
   const [showFullDesc, setShowFullDesc] = useState(false);
 
+  // Comments & Local Notes State
+  const [comments, setComments] = useState<PipedComment[]>([]);
+  const [loadingComments, setLoadingComments] = useState(false);
+  const [showComments, setShowComments] = useState(false);
+  const [localNotes, setLocalNotes] = useState<LocalNote[]>([]);
+  const [noteInput, setNoteInput] = useState("");
+
   const isSaved = savedVideos.some((v) => v.videoId === videoId);
 
-  // Extract channel ID from uploaderUrl (e.g. "/channel/UC...")
+  // Channel ID
   const channelId = details?.uploaderUrl
     ? details.uploaderUrl.replace("/channel/", "")
     : "";
 
   const isMarked = markedChannels.some((c) => c.channelId === channelId);
 
-  // 1. Fetch metadata & record watch progress in IndexedDB
+  // Load local user notes from storage
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(`rawtube_notes_${videoId}`);
+      if (stored) {
+        setLocalNotes(JSON.parse(stored));
+      }
+    } catch {
+      // ignore
+    }
+  }, [videoId]);
+
+  // 1. Fetch metadata & conditionally record watch progress
   useEffect(() => {
     let isMounted = true;
 
@@ -66,8 +97,9 @@ export default function WatchPage({ params }: PageProps) {
         const data = await fetchVideoDetails(videoId);
         if (isMounted) {
           setDetails(data);
-          // Record watch history locally
-          recordWatchProgress(videoId, 0);
+          if (!focusMode) {
+            recordWatchProgress(videoId, 0);
+          }
         }
       } catch (err) {
         console.error("Failed to load video details", err);
@@ -83,9 +115,48 @@ export default function WatchPage({ params }: PageProps) {
     return () => {
       isMounted = false;
     };
-  }, [videoId, recordWatchProgress]);
+  }, [videoId, focusMode, recordWatchProgress]);
 
-  // 2. Toggle Bookmark
+  // 2. Fetch public YouTube comments
+  const handleToggleComments = async () => {
+    const nextState = !showComments;
+    setShowComments(nextState);
+
+    if (nextState && comments.length === 0) {
+      setLoadingComments(true);
+      try {
+        const data = await fetchVideoComments(videoId);
+        setComments(data);
+      } catch (err) {
+        console.error("Failed to load comments", err);
+      } finally {
+        setLoadingComments(false);
+      }
+    }
+  };
+
+  // Add a local user note/comment
+  const handleAddNote = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!noteInput.trim()) return;
+
+    const newNote: LocalNote = {
+      id: Date.now().toString(),
+      text: noteInput.trim(),
+      time: Date.now(),
+    };
+
+    const updated = [newNote, ...localNotes];
+    setLocalNotes(updated);
+    setNoteInput("");
+    try {
+      localStorage.setItem(`rawtube_notes_${videoId}`, JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
+  };
+
+  // 3. Toggle Bookmark
   const handleToggleSave = async () => {
     if (isSaved) {
       await removeSavedVideo(videoId);
@@ -100,7 +171,7 @@ export default function WatchPage({ params }: PageProps) {
     }
   };
 
-  // 3. Toggle Channel Subscription
+  // 4. Toggle Channel Subscription
   const handleToggleChannel = async () => {
     if (!channelId) return;
 
@@ -116,7 +187,7 @@ export default function WatchPage({ params }: PageProps) {
     }
   };
 
-  // 4. Copy share link
+  // 5. Copy share link
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);
     setCopied(true);
@@ -124,44 +195,70 @@ export default function WatchPage({ params }: PageProps) {
   };
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100 flex flex-col font-sans selection:bg-neutral-800 selection:text-white">
-      {/* Header (Hidden in Focus Mode) */}
-      {!focusMode && (
-        <header className="sticky top-0 z-40 bg-neutral-950/85 backdrop-blur-xl border-b border-neutral-800/90 px-4 sm:px-8 py-3">
-          <div className="max-w-7xl mx-auto flex items-center justify-between">
-            <Link
-              href="/"
-              className="flex items-center gap-2 text-xs font-semibold text-neutral-300 hover:text-white transition-colors p-1"
-            >
-              <ArrowLeft className="w-4 h-4 text-neutral-400" />
-              <span>Back to Feed</span>
-            </Link>
+    <div className="min-h-screen bg-[#0e0f12] text-neutral-100 flex flex-col font-sans selection:bg-neutral-800 selection:text-white">
+      {/* Top Navbar */}
+      <header className="sticky top-0 z-40 bg-[#0e0f12]/90 backdrop-blur-md border-b border-neutral-800/80 px-4 sm:px-8 py-3.5">
+        <div className="max-w-7xl mx-auto flex items-center justify-between">
+          <Link
+            href="/"
+            className="flex items-center gap-1.5 text-xs font-medium text-neutral-400 hover:text-white transition-colors"
+          >
+            <ArrowLeft className="w-3.5 h-3.5" />
+            <span>Feed</span>
+          </Link>
 
-            <Link href="/" className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-neutral-900 border border-neutral-700 flex items-center justify-center text-red-500 shadow-sm">
-                <Tv2 className="w-4 h-4" />
-              </div>
-              <span className="font-bold text-sm tracking-tight text-white">RawTube</span>
-            </Link>
+          <Link href="/" className="flex items-center">
+            <span className="font-black text-sm tracking-[0.25em] text-white hover:text-neutral-300 transition-colors uppercase select-none">
+              RAWTUBE
+            </span>
+          </Link>
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setFocusMode(true)}
-              className="gap-1.5 text-xs bg-neutral-900 border-neutral-800 hover:bg-neutral-800 text-white rounded-xl h-8 px-3 font-medium"
+          {/* Focus Mode (Incognito) Toggle */}
+          <Button
+            variant={focusMode ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => setFocusMode(!focusMode)}
+            className={`gap-1.5 text-xs rounded-lg h-8 px-3 font-medium transition-colors ${
+              focusMode
+                ? "bg-neutral-800 text-white border-neutral-700"
+                : "bg-black border-neutral-800 hover:bg-neutral-900 text-white"
+            }`}
+          >
+            <EyeOff className="w-3.5 h-3.5 text-neutral-400" />
+            <span>{focusMode ? "Focus: ON" : "Focus"}</span>
+          </Button>
+        </div>
+      </header>
+
+      {/* Main Container - Expansive & Screen Optimized */}
+      <main className={`flex-1 w-full mx-auto transition-all duration-200 ${
+        theaterMode
+          ? "max-w-full px-0 sm:px-6 lg:px-10 py-4"
+          : "max-w-7xl xl:max-w-[1550px] p-4 sm:p-6 lg:p-8"
+      }`}>
+        
+        {/* Focus Mode Banner */}
+        {focusMode && (
+          <div className="mb-4 flex items-center justify-between px-4 py-2.5 rounded-lg bg-neutral-950 border border-neutral-800 text-neutral-300 text-xs mx-4 sm:mx-0">
+            <div className="flex items-center gap-2">
+              <Shield className="w-3.5 h-3.5 text-neutral-400 shrink-0" />
+              <span>Focus Mode active: Comments hidden · No history recorded</span>
+            </div>
+            <button
+              onClick={() => setFocusMode(false)}
+              className="text-xs text-neutral-300 hover:text-white underline font-medium"
             >
-              <Maximize2 className="w-3.5 h-3.5 text-emerald-400" />
-              <span className="hidden sm:inline">Focus Mode</span>
-            </Button>
+              Disable
+            </button>
           </div>
-        </header>
-      )}
+        )}
 
-      {/* Main Player & Info Area */}
-      <main className={`flex-1 flex flex-col ${focusMode ? "p-0" : "max-w-5xl w-full mx-auto p-4 sm:p-6 lg:p-8"}`}>
-        {/* Isolated Privacy Player Container */}
-        <div className={`relative w-full overflow-hidden bg-black ${focusMode ? "h-screen" : "aspect-video rounded-2xl border border-neutral-800 shadow-2xl"}`}>
-          {/* Official YouTube Embed with No-Cookie Privacy */}
+        {/* Video Player - Responsive & Theater-Ready */}
+        <div className={`relative w-full overflow-hidden bg-neutral-950 border border-neutral-900 shadow-2xl transition-all duration-200 ${
+          theaterMode
+            ? "h-[60vh] sm:h-[75vh] xl:h-[82vh] rounded-none sm:rounded-2xl"
+            : "aspect-video max-h-[80vh] rounded-xl"
+        }`}>
           <iframe
             src={`https://www.youtube-nocookie.com/embed/${videoId}?autoplay=1&rel=0&modestbranding=1`}
             title={details?.title || "Video Player"}
@@ -170,146 +267,274 @@ export default function WatchPage({ params }: PageProps) {
             referrerPolicy="strict-origin-when-cross-origin"
             className="w-full h-full border-0"
           />
-
-          {/* Floating Exit Focus Mode Button */}
-          {focusMode && (
-            <button
-              onClick={() => setFocusMode(false)}
-              className="absolute top-4 right-4 z-50 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-black/80 hover:bg-black text-white text-xs backdrop-blur-md border border-neutral-700 transition-opacity opacity-70 hover:opacity-100"
-            >
-              <Minimize2 className="w-3.5 h-3.5" />
-              <span>Exit Focus</span>
-            </button>
-          )}
         </div>
 
-        {/* Video Metadata (Hidden in Focus Mode) */}
-        {!focusMode && (
-          <div className="mt-6">
-            {loading ? (
-              <div className="py-16 flex justify-center items-center">
-                <Loader size={120} />
-              </div>
-            ) : (
-              <div className="flex flex-col gap-5">
-                {/* Video Title */}
-                <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight leading-snug">
-                  {details?.title || "Video Playback"}
-                </h1>
+        {/* Video Metadata */}
+        <div className="mt-6">
+          {loading ? (
+            <div className="py-16 flex justify-center items-center">
+              <Loader size={100} />
+            </div>
+          ) : (
+            <div className="flex flex-col gap-5">
+              {/* Video Title */}
+              <h1 className="text-lg sm:text-xl font-bold text-white tracking-tight leading-snug">
+                {details?.title || "Video"}
+              </h1>
 
-                {/* Actions & Channel Row */}
-                <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-neutral-800/80">
-                  {/* Channel Details */}
-                  <div className="flex items-center gap-3">
-                    {details?.uploaderAvatar && (
-                      /* eslint-disable-next-line @next/next/no-img-element */
-                      <img
-                        src={details.uploaderAvatar}
-                        alt={details.uploader}
-                        className="w-10 h-10 rounded-full border border-neutral-700 object-cover"
-                      />
-                    )}
-                    <div>
-                      <h2 className="font-semibold text-sm text-white">
-                        {details?.uploader || "Unknown Channel"}
-                      </h2>
-                      {details?.uploadDate && (
-                        <div className="text-xs text-neutral-400 font-medium">{details.uploadDate}</div>
-                      )}
+              {/* Actions & Channel Row */}
+              <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-neutral-900">
+                {/* Channel Details */}
+                <div className="flex items-center gap-3">
+                  {details?.uploaderAvatar ? (
+                    /* eslint-disable-next-line @next/next/no-img-element */
+                    <img
+                      src={details.uploaderAvatar}
+                      alt={details.uploader}
+                      className="w-9 h-9 rounded-full border border-neutral-800 object-cover"
+                    />
+                  ) : (
+                    <div className="w-9 h-9 rounded-full bg-neutral-900 border border-neutral-800 flex items-center justify-center font-bold text-white text-xs">
+                      {details?.uploader?.[0] || "Y"}
                     </div>
-
-                    {/* Mark / Unmark Channel Button */}
-                    {channelId && (
-                      <Button
-                        variant={isMarked ? "secondary" : "outline"}
-                        size="sm"
-                        onClick={handleToggleChannel}
-                        className={`ml-2 gap-1.5 text-xs rounded-xl h-8 px-3 font-semibold transition-all ${
-                          isMarked
-                            ? "bg-neutral-800 text-white border-neutral-700"
-                            : "bg-white text-neutral-950 hover:bg-neutral-200 border-white"
-                        }`}
-                      >
-                        {isMarked ? (
-                          <>
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                            <span>Marked</span>
-                          </>
-                        ) : (
-                          <>
-                            <PlusCircle className="w-3.5 h-3.5" />
-                            <span>Mark Channel</span>
-                          </>
-                        )}
-                      </Button>
+                  )}
+                  <div>
+                    <h2 className="font-semibold text-xs text-white">
+                      {details?.uploader || "YouTube Channel"}
+                    </h2>
+                    {details?.uploadDate && (
+                      <div className="text-[11px] text-neutral-500 font-mono">{details.uploadDate}</div>
                     )}
                   </div>
 
-                  {/* Right Actions */}
-                  <div className="flex items-center gap-2">
+                  {/* Mark / Unmark Channel Button */}
+                  {channelId && (
+                    <Button
+                      variant={isMarked ? "secondary" : "outline"}
+                      size="sm"
+                      onClick={handleToggleChannel}
+                      className={`ml-2 gap-1 text-xs rounded-lg h-7 px-2.5 font-medium transition-colors ${
+                        isMarked
+                          ? "bg-neutral-900 text-white border-neutral-800"
+                          : "bg-white text-black hover:bg-neutral-200 border-white"
+                      }`}
+                    >
+                      {isMarked ? (
+                        <>
+                          <CheckCircle2 className="w-3 h-3 text-neutral-300" />
+                          <span>Marked</span>
+                        </>
+                      ) : (
+                        <>
+                          <Plus className="w-3 h-3" />
+                          <span>Mark Channel</span>
+                        </>
+                      )}
+                    </Button>
+                  )}
+                </div>
+
+                {/* Right Actions */}
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={handleToggleSave}
+                    className="gap-1.5 text-xs bg-black border-neutral-800 hover:bg-neutral-900 text-white rounded-lg h-8 px-3 font-medium"
+                  >
+                    {isSaved ? (
+                      <>
+                        <BookmarkCheck className="w-3.5 h-3.5 text-white" />
+                        <span>Saved</span>
+                      </>
+                    ) : (
+                      <>
+                        <Bookmark className="w-3.5 h-3.5 text-neutral-400" />
+                        <span>Save</span>
+                      </>
+                    )}
+                  </Button>
+
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setTheaterMode(!theaterMode)}
+                    className={`gap-1.5 text-xs rounded-lg h-8 px-2.5 font-medium transition-colors ${
+                      theaterMode
+                        ? "bg-neutral-800 text-white"
+                        : "text-neutral-400 hover:text-white hover:bg-neutral-900"
+                    }`}
+                    title="Toggle Theater Mode"
+                  >
+                    <Tv className="w-3.5 h-3.5" />
+                    <span className="hidden sm:inline">{theaterMode ? "Default" : "Theater"}</span>
+                  </Button>
+
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleCopyLink}
+                    className="gap-1.5 text-xs text-neutral-400 hover:text-white hover:bg-neutral-900 rounded-lg h-8 px-2.5 font-medium"
+                  >
+                    {copied ? (
+                      <>
+                        <Check className="w-3.5 h-3.5 text-white" />
+                        <span>Copied</span>
+                      </>
+                    ) : (
+                      <>
+                        <Share2 className="w-3.5 h-3.5" />
+                        <span>Share</span>
+                      </>
+                    )}
+                  </Button>
+                </div>
+              </div>
+
+              {/* Description Box */}
+              {details?.description && (
+                <div className="bg-neutral-950 border border-neutral-900 rounded-xl p-4">
+                  <div
+                    className={`text-xs text-neutral-300 whitespace-pre-wrap leading-relaxed ${
+                      showFullDesc ? "" : "line-clamp-3"
+                    }`}
+                  >
+                    {details.description}
+                  </div>
+
+                  <button
+                    onClick={() => setShowFullDesc(!showFullDesc)}
+                    className="mt-2 text-xs font-semibold text-neutral-400 hover:text-white block"
+                  >
+                    {showFullDesc ? "Show less" : "More"}
+                  </button>
+                </div>
+              )}
+
+              {/* Comments & Personal Notes Section */}
+              {!focusMode && (
+                <div className="mt-4 pt-4 border-t border-neutral-900">
+                  <div className="flex items-center justify-between mb-4">
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={handleToggleSave}
-                      className="gap-2 text-xs bg-neutral-900 border-neutral-800 hover:bg-neutral-800 text-white rounded-xl h-8 px-3 font-medium"
+                      onClick={handleToggleComments}
+                      className="gap-2 text-xs bg-black border-neutral-800 hover:bg-neutral-900 text-white rounded-lg h-8 px-3 font-medium"
                     >
-                      {isSaved ? (
-                        <>
-                          <BookmarkCheck className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Saved</span>
-                        </>
-                      ) : (
-                        <>
-                          <Bookmark className="w-3.5 h-3.5 text-neutral-300" />
-                          <span>Watch Later</span>
-                        </>
-                      )}
-                    </Button>
-
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={handleCopyLink}
-                      className="gap-1.5 text-xs text-neutral-300 hover:text-white hover:bg-neutral-900 rounded-xl h-8 px-3 font-medium"
-                    >
-                      {copied ? (
-                        <>
-                          <Check className="w-3.5 h-3.5 text-emerald-400" />
-                          <span>Copied!</span>
-                        </>
-                      ) : (
-                        <>
-                          <Share2 className="w-3.5 h-3.5" />
-                          <span>Share</span>
-                        </>
+                      <MessageSquare className="w-3.5 h-3.5 text-neutral-400" />
+                      <span>{showComments ? "Hide Comments" : "Watch Comments"}</span>
+                      {comments.length > 0 && (
+                        <span className="text-[10px] text-neutral-500 font-mono">
+                          ({comments.length + localNotes.length})
+                        </span>
                       )}
                     </Button>
                   </div>
-                </div>
 
-                {/* Description Box */}
-                {details?.description && (
-                  <div className="bg-neutral-900/60 border border-neutral-800 rounded-2xl p-4 sm:p-5">
-                    <div
-                      className={`text-xs sm:text-sm text-neutral-300 whitespace-pre-wrap leading-relaxed font-normal ${
-                        showFullDesc ? "" : "line-clamp-4"
-                      }`}
-                    >
-                      {details.description}
+                  {showComments && (
+                    <div className="flex flex-col gap-4">
+                      {/* Personal Notes / Local Comment Box */}
+                      <form onSubmit={handleAddNote} className="flex gap-2">
+                        <input
+                          type="text"
+                          value={noteInput}
+                          onChange={(e) => setNoteInput(e.target.value)}
+                          placeholder="Add a private note or comment on this video..."
+                          className="flex-1 px-3.5 py-2 text-xs rounded-lg bg-neutral-950 border border-neutral-800 focus:outline-none focus:border-neutral-500 text-white placeholder:text-neutral-500"
+                        />
+                        <Button
+                          type="submit"
+                          size="sm"
+                          disabled={!noteInput.trim()}
+                          className="bg-white text-black hover:bg-neutral-200 text-xs rounded-lg h-8 px-3 font-semibold disabled:opacity-40"
+                        >
+                          <Send className="w-3 h-3" />
+                        </Button>
+                      </form>
+
+                      {/* Display Personal Notes First */}
+                      {localNotes.length > 0 && (
+                        <div className="space-y-2">
+                          <span className="text-[10px] font-mono tracking-wider text-neutral-500 uppercase block">
+                            Your Saved Notes:
+                          </span>
+                          {localNotes.map((note) => (
+                            <div
+                              key={note.id}
+                              className="p-3 rounded-lg bg-neutral-950 border border-neutral-800 text-xs"
+                            >
+                              <div className="text-white leading-relaxed">{note.text}</div>
+                              <div className="text-[10px] text-neutral-600 font-mono mt-1">
+                                {new Date(note.time).toLocaleDateString()}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Public YouTube Comments */}
+                      {loadingComments ? (
+                        <div className="py-8 flex justify-center items-center">
+                          <Loader size={80} />
+                        </div>
+                      ) : comments.length > 0 ? (
+                        <div className="space-y-3">
+                          <span className="text-[10px] font-mono tracking-wider text-neutral-500 uppercase block">
+                            Public YouTube Comments:
+                          </span>
+                          {comments.map((comment, idx) => (
+                            <div
+                              key={idx}
+                              className="p-3.5 rounded-lg bg-neutral-950 border border-neutral-900 flex gap-3 text-left"
+                            >
+                              {comment.authorAvatar ? (
+                                /* eslint-disable-next-line @next/next/no-img-element */
+                                <img
+                                  src={comment.authorAvatar}
+                                  alt={comment.author}
+                                  className="w-7 h-7 rounded-full border border-neutral-800 object-cover shrink-0"
+                                />
+                              ) : (
+                                <div className="w-7 h-7 rounded-full bg-neutral-900 border border-neutral-800 flex items-center justify-center font-bold text-[10px] text-white shrink-0">
+                                  {comment.author[0] || "U"}
+                                </div>
+                              )}
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="font-semibold text-xs text-white truncate">
+                                    {comment.author}
+                                  </span>
+                                  {comment.commentedTime && (
+                                    <span className="text-[10px] text-neutral-500 font-mono">
+                                      {comment.commentedTime}
+                                    </span>
+                                  )}
+                                </div>
+                                <p className="text-xs text-neutral-300 leading-relaxed whitespace-pre-wrap">
+                                  {comment.content}
+                                </p>
+                                {comment.likeCount > 0 && (
+                                  <div className="flex items-center gap-1.5 mt-2 text-[10px] text-neutral-500 font-mono">
+                                    <ThumbsUp className="w-3 h-3 text-neutral-600" />
+                                    <span>{comment.likeCount}</span>
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="py-6 text-center text-xs text-neutral-500">
+                          Comments unavailable for this video.
+                        </div>
+                      )}
                     </div>
-
-                    <button
-                      onClick={() => setShowFullDesc(!showFullDesc)}
-                      className="mt-3 text-xs font-semibold text-white hover:underline block"
-                    >
-                      {showFullDesc ? "Show less" : "...more"}
-                    </button>
-                  </div>
-                )}
-              </div>
-            )}
-          </div>
-        )}
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </main>
     </div>
   );

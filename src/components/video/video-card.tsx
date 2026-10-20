@@ -74,8 +74,8 @@ export function VideoCard({ video }: VideoCardProps) {
 
                 {/* Watched Indicator Pill */}
                 {isWatched && (
-                    <span className="absolute top-2 left-2 flex items-center gap-1 rounded-md bg-neutral-900/90 border border-neutral-700 px-2 py-0.5 text-xs text-neutral-300 backdrop-blur-sm">
-                        <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                    <span className="absolute top-2 left-2 flex items-center gap-1 rounded bg-black/80 border border-neutral-700 px-1.5 py-0.5 text-[10px] font-mono text-neutral-300 backdrop-blur-sm">
+                        <CheckCircle2 className="w-3 h-3 text-white" />
                         Watched
                     </span>
                 )}
@@ -84,12 +84,12 @@ export function VideoCard({ video }: VideoCardProps) {
                 <button
                     onClick={handleToggleBookmark}
                     aria-label={isSaved ? "Remove from Watch Later" : "Save to Watch Later"}
-                    className="absolute top-2 right-2 p-1.5 rounded-lg bg-black/60 hover:bg-black/90 text-white backdrop-blur-sm transition-colors opacity-90 group-hover:opacity-100"
+                    className="absolute top-2 right-2 p-1.5 rounded bg-black/70 hover:bg-black text-white backdrop-blur-sm transition-colors opacity-90 group-hover:opacity-100 border border-neutral-800"
                 >
                     {isSaved ? (
-                        <BookmarkCheck className="w-4 h-4 text-emerald-400" />
+                        <BookmarkCheck className="w-3.5 h-3.5 text-white" />
                     ) : (
-                        <Bookmark className="w-4 h-4 text-neutral-300 hover:text-white" />
+                        <Bookmark className="w-3.5 h-3.5 text-neutral-400 hover:text-white" />
                     )}
                 </button>
             </div>
