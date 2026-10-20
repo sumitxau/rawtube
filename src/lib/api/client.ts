@@ -6,12 +6,12 @@ import type { VideoMetadata } from "@/types/library";
  * Includes automatic instance fallback if one public mirror goes down.
  */
 
-// List of public Piped instances to try in sequence
+// List of public Piped instances to try in sequence (tested & active)
 export const PIPED_INSTANCES = [
-    "https://pipedapi.kavin.rocks",
-    "https://api.piped.privacy.com.de",
-    "https://pipedapi.leptons.xyz",
-    "https://piped-api.garudalinux.org",
+  "https://pipedapi.ducks.party",
+  "https://piped-api.garudalinux.org",
+  "https://api.piped.projectsegfau.lt",
+  "https://pipedapi.kavin.rocks",
 ];
 
 const DEFAULT_TIMEOUT_MS = 8000; // 8 second timeout per request
@@ -111,23 +111,45 @@ export async function fetchVideoDetails(videoId: string): Promise<PipedStreamRes
     return await apiGet<PipedStreamResponse>(`/streams/${videoId}`);
 }
 
-// 3. Search (Channels and Videos)
+// 3. Search (Channels and Videos) with Endless Pagination Support
+
+export interface SearchPageResult {
+  videos: VideoMetadata[];
+  nextpage?: string;
+}
+
+export async function searchVideosPage(
+  query: string,
+  nextpage?: string
+): Promise<SearchPageResult> {
+  const path = nextpage
+    ? `/nextpage/search?nextpage=${encodeURIComponent(nextpage)}&q=${encodeURIComponent(query)}&filter=videos`
+    : `/search?q=${encodeURIComponent(query)}&filter=videos`;
+
+  const data = await apiGet<{ items?: Array<any>; nextpage?: string }>(path);
+
+  if (!data.items) return { videos: [], nextpage: undefined };
+
+  const videos: VideoMetadata[] = data.items
+    .filter((item) => item.type === "stream")
+    .map((item) => ({
+      id: item.url.replace("/watch?v=", ""),
+      title: item.title,
+      channelName: item.uploaderName || item.uploader || "Unknown Channel",
+      channelId: item.uploaderUrl ? item.uploaderUrl.replace("/channel/", "") : "",
+      thumbnailUrl: item.thumbnail,
+      duration: item.duration,
+      uploadedDate: item.uploadedDate,
+      views: item.views,
+    }));
+
+  return {
+    videos,
+    nextpage: data.nextpage,
+  };
+}
 
 export async function searchVideos(query: string): Promise<VideoMetadata[]> {
-    const data = await apiGet<{ items: Array<any> }>(`/search?q=${encodeURIComponent(query)}&filter=all`);
-
-    if (!data.items) return [];
-
-    return data.items
-        .filter((item) => item.type === "stream")
-        .map((item) => ({
-            id: item.url.replace("/watch?v=", ""),
-            title: item.title,
-            channelName: item.uploaderName,
-            channelId: item.uploaderUrl ? item.uploaderUrl.replace("/channel/", "") : "",
-            thumbnailUrl: item.thumbnail,
-            duration: item.duration,
-            uploadedDate: item.uploadedDate,
-            views: item.views,
-        }));
+  const result = await searchVideosPage(query);
+  return result.videos;
 }
