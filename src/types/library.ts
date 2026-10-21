@@ -20,6 +20,8 @@ export interface WatchedVideo {
     watchedAt: number;        // when it was last played
     progressSeconds: number;  // timestamp to resume playback where you left off
     durationSeconds?: number;
+    channelTitle?: string;
+    channelId?: string;
 }
 
 // User-created custom playlists stored locally

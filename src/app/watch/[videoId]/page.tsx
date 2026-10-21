@@ -98,7 +98,8 @@ export default function WatchPage({ params }: PageProps) {
         if (isMounted) {
           setDetails(data);
           if (!focusMode) {
-            recordWatchProgress(videoId, 0);
+            const chId = data.uploaderUrl ? data.uploaderUrl.replace("/channel/", "") : "";
+            recordWatchProgress(videoId, 0, undefined, data.uploader, chId);
           }
         }
       } catch (err) {
@@ -116,6 +117,22 @@ export default function WatchPage({ params }: PageProps) {
       isMounted = false;
     };
   }, [videoId, focusMode, recordWatchProgress]);
+
+  useEffect(() => {
+    if (focusMode || !details) return;
+
+    const chId = details.uploaderUrl ? details.uploaderUrl.replace("/channel/", "") : "";
+    let accumulatedSeconds = 0;
+
+    const timer = setInterval(() => {
+      if (typeof document !== "undefined" && !document.hidden) {
+        accumulatedSeconds += 10;
+        recordWatchProgress(videoId, accumulatedSeconds, details.views, details.uploader, chId);
+      }
+    }, 10000);
+
+    return () => clearInterval(timer);
+  }, [videoId, focusMode, details, recordWatchProgress]);
 
   // 2. Fetch public YouTube comments
   const handleToggleComments = async () => {

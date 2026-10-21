@@ -77,13 +77,17 @@ export async function isChannelMarked(channelId: string): Promise<boolean> {
 export async function recordWatchProgress(
     videoId: string,
     progressSeconds: number,
-    durationSeconds?: number
+    durationSeconds?: number,
+    channelTitle?: string,
+    channelId?: string
 ): Promise<void> {
     await db.watchedVideos.put({
         videoId,
         watchedAt: Date.now(),
         progressSeconds,
         durationSeconds,
+        channelTitle,
+        channelId,
     });
 }
 

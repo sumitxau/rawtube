@@ -10,43 +10,57 @@ import {
   Plus,
   Check,
   X,
-  Radio,
   ArrowDownCircle,
   EyeOff,
   Settings2,
   Trash2,
-  SlidersHorizontal,
+  Shuffle,
+  Zap,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Loader } from "@/components/ui/loader";
 import { useLibrary } from "@/hooks/use-library";
-import { fetchChannelUploads, searchVideosPage, PIPED_INSTANCES } from "@/lib/api/client";
+import { fetchChannelUploads, searchVideosPage } from "@/lib/api/client";
 import { VideoCard } from "@/components/video/video-card";
 import {
   DIRECTORY_CATEGORIES,
   getChannelsByCategory,
+  interleaveAndShuffle,
+  shuffleVideos,
   type DirectoryCategory,
   type CuratedChannel,
 } from "@/lib/directory/channels";
+import {
+  getRecommendedChannelsForMyFeed,
+  getWatchStatsSummary,
+  type CreatorAffinity,
+  type WatchStatsSummary,
+} from "@/lib/recommendation/engine";
 import type { VideoMetadata } from "@/types/library";
 
 export default function HomePage() {
-  const { markedChannels, markChannel, unmarkChannel, isReady, savedVideos } = useLibrary();
+  const {
+    markedChannels,
+    markChannel,
+    unmarkChannel,
+    isReady,
+    savedVideos,
+    watchedVideos,
+    clearAllLocalData,
+  } = useLibrary();
 
-  // Active category: defaults to "ai-research" or "all" so visitors NEVER see an empty dead screen
-  const [activeTab, setActiveTab] = useState<string>("ai-research");
+  const [activeTab, setActiveTab] = useState<string>("all");
   const [videos, setVideos] = useState<VideoMetadata[]>([]);
   const [loading, setLoading] = useState(false);
+  const [shuffling, setShuffling] = useState(false);
 
-  // Search state
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<VideoMetadata[]>([]);
   const [searchNextPage, setSearchNextPage] = useState<string | undefined>(undefined);
   const [searching, setSearching] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
 
-  // Focus Mode & Modals
   const [focusMode, setFocusMode] = useState(false);
   const [showChannelModal, setShowChannelModal] = useState(false);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
@@ -54,36 +68,23 @@ export default function HomePage() {
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadMoreTriggerRef = useRef<HTMLDivElement | null>(null);
 
-  // Get curated channels for currently selected category
+  const watchStats: WatchStatsSummary = useMemo(() => {
+    return getWatchStatsSummary(watchedVideos);
+  }, [watchedVideos]);
+
   const categoryChannels = useMemo(() => {
     return getChannelsByCategory(activeTab);
   }, [activeTab]);
 
-  // Load feed based on active tab
   const loadCategoryFeed = useCallback(async () => {
     setLoading(true);
     setVideos([]);
 
     try {
       if (activeTab === "my-feed") {
-        if (markedChannels.length === 0) {
-          setVideos([]);
-          setLoading(false);
-          return;
-        }
+        const recResult = getRecommendedChannelsForMyFeed(watchedVideos, markedChannels);
+        const channelsToFetch = recResult.channels.slice(0, 6);
 
-        const results = await Promise.allSettled(
-          markedChannels.map((ch) => fetchChannelUploads(ch.channelId))
-        );
-
-        const all: VideoMetadata[] = [];
-        for (const res of results) {
-          if (res.status === "fulfilled") all.push(...res.value);
-        }
-        setVideos(all);
-      } else {
-        // Fetch from the top curated channels in this category
-        const channelsToFetch = categoryChannels.slice(0, 5);
         const results = await Promise.allSettled(
           channelsToFetch.map((ch) => fetchChannelUploads(ch.id))
         );
@@ -93,16 +94,15 @@ export default function HomePage() {
           if (res.status === "fulfilled") all.push(...res.value);
         }
 
-        // If specific channel API was slow, supplement with category search query
-        if (all.length < 6) {
-          const cat = DIRECTORY_CATEGORIES.find((c) => c.id === activeTab);
-          if (cat) {
-            const searchFallback = await searchVideosPage(cat.seedQuery);
-            all.push(...searchFallback.videos);
-          }
+        if (all.length < 8) {
+          const fallbackQuery =
+            recResult.topAffinities.length > 0
+              ? `${recResult.topAffinities[0].channelTitle} tech`
+              : "solidity rust full stack web development";
+          const searchFallback = await searchVideosPage(fallbackQuery);
+          all.push(...searchFallback.videos);
         }
 
-        // Deduplicate videos by ID
         const seen = new Set<string>();
         const unique = all.filter((v) => {
           if (seen.has(v.id)) return false;
@@ -110,14 +110,41 @@ export default function HomePage() {
           return true;
         });
 
-        setVideos(unique);
+        setVideos(interleaveAndShuffle(unique));
+      } else {
+        const channelsToFetch = categoryChannels.slice(0, 8);
+        const results = await Promise.allSettled(
+          channelsToFetch.map((ch) => fetchChannelUploads(ch.id))
+        );
+
+        const all: VideoMetadata[] = [];
+        for (const res of results) {
+          if (res.status === "fulfilled") all.push(...res.value);
+        }
+
+        if (all.length < 8) {
+          const cat = DIRECTORY_CATEGORIES.find((c) => c.id === activeTab);
+          if (cat) {
+            const searchFallback = await searchVideosPage(cat.seedQuery);
+            all.push(...searchFallback.videos);
+          }
+        }
+
+        const seen = new Set<string>();
+        const unique = all.filter((v) => {
+          if (seen.has(v.id)) return false;
+          seen.add(v.id);
+          return true;
+        });
+
+        setVideos(interleaveAndShuffle(unique));
       }
     } catch (err) {
       console.error("Feed error:", err);
     } finally {
       setLoading(false);
     }
-  }, [activeTab, markedChannels, categoryChannels]);
+  }, [activeTab, markedChannels, watchedVideos, categoryChannels]);
 
   useEffect(() => {
     if (isReady) {
@@ -125,7 +152,12 @@ export default function HomePage() {
     }
   }, [isReady, activeTab, loadCategoryFeed]);
 
-  // Direct Search
+  const handleShuffle = () => {
+    setShuffling(true);
+    setVideos((prev) => interleaveAndShuffle(shuffleVideos(prev)));
+    setTimeout(() => setShuffling(false), 350);
+  };
+
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!searchQuery.trim()) return;
@@ -145,7 +177,6 @@ export default function HomePage() {
     }
   };
 
-  // Load More Search Results (Endless Scrolling)
   const loadMoreSearchResults = useCallback(async () => {
     if (!searchNextPage || loadingMore || searching) return;
 
@@ -161,7 +192,6 @@ export default function HomePage() {
     }
   }, [searchNextPage, loadingMore, searching, searchQuery]);
 
-  // Auto-fetch on scroll
   useEffect(() => {
     if (!loadMoreTriggerRef.current) return;
     if (observerRef.current) observerRef.current.disconnect();
@@ -181,7 +211,6 @@ export default function HomePage() {
     };
   }, [searchNextPage, loadingMore, loadMoreSearchResults]);
 
-  // Bulk follow all channels in the current category
   const handleFollowCategory = async () => {
     for (const ch of categoryChannels) {
       await markChannel({
@@ -194,23 +223,18 @@ export default function HomePage() {
 
   return (
     <div className="relative min-h-screen bg-[#0e0f12] text-neutral-100 flex flex-col font-sans selection:bg-neutral-800 selection:text-white overflow-x-hidden">
-      {/* Subtle Monochrome Grid */}
       <div className="fixed inset-0 pointer-events-none z-0">
         <div className="absolute inset-0 bg-[radial-gradient(rgba(255,255,255,0.03)_1px,transparent_1px)] [background-size:24px_24px] [mask-image:radial-gradient(ellipse_60%_50%_at_50%_0%,#000_70%,transparent_100%)]" />
       </div>
 
-      {/* Top Navbar */}
       <header className="sticky top-0 z-40 bg-[#0e0f12]/90 backdrop-blur-md border-b border-neutral-800/80 px-4 sm:px-6 lg:px-10 py-3.5 transition-colors">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-          
-          {/* Brand: Pure RAWTUBE Text */}
           <Link href="/" className="flex items-center shrink-0">
             <span className="font-black text-sm tracking-[0.25em] text-white hover:text-neutral-300 transition-colors uppercase select-none">
               RAWTUBE
             </span>
           </Link>
 
-          {/* Search Bar */}
           <form onSubmit={handleSearch} className="flex-1 max-w-lg relative">
             <div className="relative flex items-center">
               <Search className="w-3.5 h-3.5 text-neutral-500 absolute left-3.5 pointer-events-none" />
@@ -236,9 +260,7 @@ export default function HomePage() {
             </div>
           </form>
 
-          {/* Action Buttons */}
           <div className="flex items-center gap-2">
-            {/* Focus Mode (Vanish Feed) Toggle */}
             <Button
               variant={focusMode ? "secondary" : "ghost"}
               size="sm"
@@ -253,7 +275,6 @@ export default function HomePage() {
               <span className="hidden sm:inline">{focusMode ? "Focus: ON" : "Focus"}</span>
             </Button>
 
-            {/* Manage Channels Button */}
             <Button
               variant="ghost"
               size="sm"
@@ -263,6 +284,17 @@ export default function HomePage() {
             >
               <Settings2 className="w-3.5 h-3.5" />
               <span className="hidden md:inline">Subscriptions ({markedChannels.length})</span>
+            </Button>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleShuffle}
+              disabled={loading || videos.length === 0}
+              className="text-neutral-400 hover:text-white hover:bg-neutral-900 rounded-lg gap-1.5 text-xs h-8 px-2 font-medium"
+              title="Shuffle"
+            >
+              <Shuffle className={`w-3.5 h-3.5 ${shuffling ? "animate-spin text-white" : ""}`} />
             </Button>
 
             <Button
@@ -295,10 +327,7 @@ export default function HomePage() {
         </div>
       </header>
 
-      {/* Main Container */}
       <main className="relative z-10 flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-10 py-6 sm:py-8">
-        
-        {/* Search Results Display */}
         {searchResults.length > 0 && (
           <motion.div
             initial={{ opacity: 0, y: 10 }}
@@ -356,7 +385,6 @@ export default function HomePage() {
           </motion.div>
         )}
 
-        {/* Focus Mode: Vanish the entire feed */}
         {focusMode ? (
           <div className="max-w-md mx-auto my-24 p-8 rounded-xl bg-[#16171b] border border-neutral-800 text-center">
             <h2 className="text-sm font-bold tracking-wider uppercase text-white mb-2">Focus Mode Active</h2>
@@ -373,40 +401,104 @@ export default function HomePage() {
             </Button>
           </div>
         ) : (
-          /* Normal Active Feed: Never Dead! */
           <div>
-            {/* Category Navigation Bar */}
-            <div className="flex items-center gap-2 mb-6 pb-2 border-b border-neutral-800/80 overflow-x-auto no-scrollbar">
-              {/* My Personal Feed Tab */}
+            <div className="relative flex items-center gap-1.5 mb-6 pb-2 border-b border-neutral-800/80 overflow-x-auto no-scrollbar">
               <button
                 onClick={() => setActiveTab("my-feed")}
-                className={`text-xs px-3.5 py-1.5 rounded-md transition-colors font-semibold shrink-0 ${
+                className={`relative text-xs px-3.5 py-1.5 rounded-md transition-colors font-medium shrink-0 ${
                   activeTab === "my-feed"
-                    ? "bg-white text-black shadow-sm"
-                    : "text-neutral-400 hover:text-white bg-[#16171b] border border-neutral-800/80"
+                    ? "text-black font-semibold"
+                    : "text-neutral-400 hover:text-white"
                 }`}
               >
-                My Feed ({markedChannels.length})
+                {activeTab === "my-feed" && (
+                  <motion.span
+                    layoutId="activeCategoryPill"
+                    className="absolute inset-0 bg-white rounded-md -z-10 shadow-sm"
+                    transition={{ type: "spring", stiffness: 450, damping: 35 }}
+                  />
+                )}
+                <span>My Feed</span>
+                {markedChannels.length > 0 && (
+                  <span className="ml-1 text-[10px] opacity-80">({markedChannels.length})</span>
+                )}
               </button>
 
-              {/* Curated Category Tabs */}
               {DIRECTORY_CATEGORIES.map((cat) => (
                 <button
                   key={cat.id}
                   onClick={() => setActiveTab(cat.id)}
-                  className={`text-xs px-3 py-1.5 rounded-md transition-colors font-medium shrink-0 ${
+                  className={`relative text-xs px-3 py-1.5 rounded-md transition-colors font-medium shrink-0 ${
                     activeTab === cat.id
-                      ? "bg-white text-black shadow-sm font-semibold"
-                      : "text-neutral-400 hover:text-white hover:bg-[#16171b]"
+                      ? "text-black font-semibold"
+                      : "text-neutral-400 hover:text-white"
                   }`}
                 >
-                  {cat.label}
+                  {activeTab === cat.id && (
+                    <motion.span
+                      layoutId="activeCategoryPill"
+                      className="absolute inset-0 bg-white rounded-md -z-10 shadow-sm"
+                      transition={{ type: "spring", stiffness: 450, damping: 35 }}
+                    />
+                  )}
+                  <span>{cat.label}</span>
                 </button>
               ))}
             </div>
 
-            {/* Category Header & Follow Controls */}
-            {activeTab !== "my-feed" && (
+            {activeTab === "my-feed" ? (
+              <div className="mb-6 p-4 sm:p-5 rounded-xl bg-[#16171b] border border-neutral-800/80 flex flex-col gap-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <Zap className="w-3.5 h-3.5 text-white" />
+                      <h1 className="text-sm font-bold text-white tracking-tight uppercase font-mono">
+                        My Personal Feed
+                      </h1>
+                      <span className="text-[10px] font-mono bg-neutral-900 border border-neutral-800 text-neutral-400 px-2 py-0.5 rounded">
+                        100% On-Device
+                      </span>
+                    </div>
+                    <p className="text-xs text-neutral-400 mt-1">
+                      {watchStats.isColdStart
+                        ? "Seeded with Web3 & authentic Indian engineering creators. Automatically tunes as you watch."
+                        : `Tuned by ${watchStats.totalVideosWatched} watched videos (${watchStats.totalMinutesWatched} min total watch time on device).`}
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={handleShuffle}
+                      disabled={loading || videos.length === 0}
+                      className="h-7 text-xs bg-black border-neutral-800 hover:bg-neutral-900 text-white rounded-md gap-1.5 font-medium"
+                      title="Shuffle"
+                    >
+                      <Shuffle className={`w-3 h-3 ${shuffling ? "animate-spin text-white" : ""}`} />
+                      <span>Shuffle</span>
+                    </Button>
+                  </div>
+                </div>
+
+                {watchStats.topCreators.length > 0 && (
+                  <div className="pt-2 border-t border-neutral-800/60 flex flex-wrap items-center gap-2 text-xs">
+                    <span className="text-neutral-500 font-mono text-[11px]">Top Affinities:</span>
+                    {watchStats.topCreators.map((creator) => (
+                      <span
+                        key={creator.name}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-neutral-900 border border-neutral-800 text-neutral-300 text-[11px] font-medium"
+                      >
+                        <span>{creator.name}</span>
+                        <span className="text-[10px] text-neutral-500 font-mono">
+                          {creator.minutes}m
+                        </span>
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ) : (
               <div className="mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 rounded-xl bg-[#16171b] border border-neutral-800/80">
                 <div>
                   <h1 className="text-sm font-bold text-white tracking-tight uppercase font-mono">
@@ -421,9 +513,21 @@ export default function HomePage() {
                   <Button
                     variant="outline"
                     size="sm"
+                    onClick={handleShuffle}
+                    disabled={loading || videos.length === 0}
+                    className="h-7 text-xs bg-black border-neutral-800 hover:bg-neutral-900 text-white rounded-md gap-1.5 font-medium"
+                    title="Shuffle"
+                  >
+                    <Shuffle className={`w-3 h-3 ${shuffling ? "animate-spin text-white" : ""}`} />
+                    <span>Shuffle</span>
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
                     onClick={handleFollowCategory}
                     className="h-7 text-xs bg-black border-neutral-800 hover:bg-neutral-900 text-white rounded-md gap-1 font-medium"
-                    title="Add all channels in this category to your subscriptions"
+                    title="Follow"
                   >
                     <Plus className="w-3 h-3 text-neutral-400" />
                     <span>Follow All ({categoryChannels.length})</span>
@@ -432,7 +536,6 @@ export default function HomePage() {
               </div>
             )}
 
-            {/* Video Cards Grid */}
             {loading ? (
               <div className="flex flex-col items-center justify-center py-20">
                 <Loader size={100} />
@@ -463,38 +566,21 @@ export default function HomePage() {
                 ))}
               </div>
             ) : (
-              /* Empty state only if My Feed is truly empty */
               <div className="py-20 text-center text-neutral-500 text-xs max-w-sm mx-auto">
-                {activeTab === "my-feed" ? (
-                  <div>
-                    <p className="text-sm font-semibold text-neutral-300 mb-1">Your Personal Feed is Empty</p>
-                    <p className="text-xs text-neutral-500 mb-4">
-                      Explore the categories above like AI Research, Web3 or Robotics, and click Follow on creators!
-                    </p>
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => setActiveTab("ai-research")}
-                      className="text-xs bg-[#16171b] border-neutral-800 text-white"
-                    >
-                      Browse AI Research
-                    </Button>
-                  </div>
-                ) : (
-                  <p>No recent uploads found. Refresh or try another category.</p>
-                )}
+                <p>No recent uploads found. Refresh or try another category.</p>
               </div>
             )}
           </div>
         )}
       </main>
 
-      {/* Subscriptions Management Modal */}
       {showChannelModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
           <div className="bg-[#16171b] border border-neutral-800 rounded-xl max-w-md w-full p-6 shadow-2xl">
             <div className="flex items-center justify-between pb-4 border-b border-neutral-800 mb-4">
-              <h2 className="text-xs font-bold tracking-wider uppercase text-white font-mono">My Subscriptions</h2>
+              <h2 className="text-xs font-bold tracking-wider uppercase text-white font-mono">
+                My Subscriptions ({markedChannels.length})
+              </h2>
               <button
                 onClick={() => setShowChannelModal(false)}
                 className="text-neutral-500 hover:text-white p-1"
@@ -504,7 +590,9 @@ export default function HomePage() {
             </div>
 
             {markedChannels.length === 0 ? (
-              <p className="text-xs text-neutral-500 py-6 text-center font-mono">No channels subscribed yet.</p>
+              <p className="text-xs text-neutral-500 py-6 text-center font-mono">
+                No channels subscribed yet. Browse categories and click Follow All!
+              </p>
             ) : (
               <div className="flex flex-col gap-2 max-h-80 overflow-y-auto pr-1">
                 {markedChannels.map((ch) => (
@@ -529,12 +617,26 @@ export default function HomePage() {
               </div>
             )}
 
-            <div className="mt-5 pt-3 border-t border-neutral-800 flex justify-end">
+            <div className="mt-5 pt-3 border-t border-neutral-800 flex justify-between items-center">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={async () => {
+                  if (confirm("Wipe all local subscriptions and watch history from this device?")) {
+                    await clearAllLocalData();
+                    setShowChannelModal(false);
+                  }
+                }}
+                className="text-neutral-500 hover:text-red-400 text-xs px-2 h-7"
+              >
+                Wipe Local Data
+              </Button>
+
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setShowChannelModal(false)}
-                className="text-xs bg-black border-neutral-800 text-white rounded-md px-3"
+                className="text-xs bg-black border-neutral-800 text-white rounded-md px-3 h-7"
               >
                 Close
               </Button>
@@ -543,12 +645,11 @@ export default function HomePage() {
         </div>
       )}
 
-      {/* Minimalist Monochrome Footer */}
       <footer className="mt-auto border-t border-neutral-800/60 py-4 px-6 text-center text-xs text-neutral-500 bg-[#0e0f12]">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 font-mono text-[11px]">
           <span>RAWTUBE · LOCAL-FIRST INTELLIGENCE</span>
           <span>
-            {markedChannels.length} Channels Followed · {savedVideos.length} Saved
+            {markedChannels.length} Channels Followed · {savedVideos.length} Saved · {watchedVideos.length} Watched
           </span>
         </div>
       </footer>
