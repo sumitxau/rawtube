@@ -10,21 +10,19 @@ import {
     unmarkChannel,
     isChannelMarked,
     recordWatchProgress,
+    removeWatchedVideo,
+    clearWatchedHistory,
+    setChannelPreference,
+    removeChannelPreference,
+    getChannelPreference,
     clearAllLocalData,
 } from "@/lib/db/database";
-import type { SavedVideo, MarkedChannel, WatchedVideo } from "@/types/library";
 
-/**
- * useLibrary Hook
- * Reactively subscribes components to IndexedDB data.
- * When data changes anywhere in the browser, components update automatically.
- */
 export function useLibrary() {
-    // 1. Reactive live queries with Dexie (sorted newest first)
     const savedVideos = useLiveQuery(
         () => db.savedVideos.orderBy("savedAt").reverse().toArray(),
         [],
-        [] // Default fallback to empty array while IndexedDB initializes
+        []
     );
 
     const markedChannels = useLiveQuery(
@@ -39,17 +37,21 @@ export function useLibrary() {
         []
     );
 
-    // Ready flag ensures UI doesn't flicker before IndexedDB is mounted
+    const preferences = useLiveQuery(
+        () => db.preferences.toArray(),
+        [],
+        []
+    );
+
     const isReady = savedVideos !== undefined && markedChannels !== undefined;
 
     return {
-        // Reactive Data Collections
         savedVideos: savedVideos ?? [],
         markedChannels: markedChannels ?? [],
         watchedVideos: watchedVideos ?? [],
+        preferences: preferences ?? [],
         isReady,
 
-        // Mutation Actions
         saveVideo,
         removeSavedVideo,
         isVideoSaved,
@@ -57,6 +59,11 @@ export function useLibrary() {
         unmarkChannel,
         isChannelMarked,
         recordWatchProgress,
+        removeWatchedVideo,
+        clearWatchedHistory,
+        setChannelPreference,
+        removeChannelPreference,
+        getChannelPreference,
         clearAllLocalData,
     };
 }

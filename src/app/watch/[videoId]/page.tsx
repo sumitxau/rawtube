@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, use } from "react";
+import { useEffect, useState, use, Suspense } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
@@ -38,7 +38,21 @@ interface LocalNote {
   time: number;
 }
 
-export default function WatchPage({ params }: PageProps) {
+export default function WatchPage(props: PageProps) {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen bg-[#0e0f12] text-white flex items-center justify-center">
+          <Loader size={100} />
+        </div>
+      }
+    >
+      <WatchContent {...props} />
+    </Suspense>
+  );
+}
+
+function WatchContent({ params }: PageProps) {
   const unwrappedParams = use(params);
   const videoId = unwrappedParams.videoId;
 
@@ -80,7 +94,10 @@ export default function WatchPage({ params }: PageProps) {
     try {
       const stored = localStorage.getItem(`rawtube_notes_${videoId}`);
       if (stored) {
-        setLocalNotes(JSON.parse(stored));
+        const parsed = JSON.parse(stored);
+        queueMicrotask(() => {
+          setLocalNotes(parsed);
+        });
       }
     } catch {
       // ignore
@@ -99,7 +116,7 @@ export default function WatchPage({ params }: PageProps) {
           setDetails(data);
           if (!focusMode) {
             const chId = data.uploaderUrl ? data.uploaderUrl.replace("/channel/", "") : "";
-            recordWatchProgress(videoId, 0, undefined, data.uploader, chId);
+            recordWatchProgress(videoId, 0, undefined, data.uploader, chId, data.title);
           }
         }
       } catch (err) {
@@ -127,7 +144,7 @@ export default function WatchPage({ params }: PageProps) {
     const timer = setInterval(() => {
       if (typeof document !== "undefined" && !document.hidden) {
         accumulatedSeconds += 10;
-        recordWatchProgress(videoId, accumulatedSeconds, details.views, details.uploader, chId);
+        recordWatchProgress(videoId, accumulatedSeconds, details.views, details.uploader, chId, details.title);
       }
     }, 10000);
 
@@ -303,26 +320,32 @@ export default function WatchPage({ params }: PageProps) {
               <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-neutral-900">
                 {/* Channel Details */}
                 <div className="flex items-center gap-3">
-                  {details?.uploaderAvatar ? (
-                    /* eslint-disable-next-line @next/next/no-img-element */
-                    <img
-                      src={details.uploaderAvatar}
-                      alt={details.uploader}
-                      className="w-9 h-9 rounded-full border border-neutral-800 object-cover"
-                    />
-                  ) : (
-                    <div className="w-9 h-9 rounded-full bg-neutral-900 border border-neutral-800 flex items-center justify-center font-bold text-white text-xs">
-                      {details?.uploader?.[0] || "Y"}
-                    </div>
-                  )}
-                  <div>
-                    <h2 className="font-semibold text-xs text-white">
-                      {details?.uploader || "YouTube Channel"}
-                    </h2>
-                    {details?.uploadDate && (
-                      <div className="text-[11px] text-neutral-500 font-mono">{details.uploadDate}</div>
+                  <Link
+                    href={`/channel/${encodeURIComponent(channelId || details?.uploader || "channel")}`}
+                    className="flex items-center gap-3 group"
+                    title={`View ${details?.uploader || "channel"}`}
+                  >
+                    {details?.uploaderAvatar ? (
+                      /* eslint-disable-next-line @next/next/no-img-element */
+                      <img
+                        src={details.uploaderAvatar}
+                        alt={details.uploader}
+                        className="w-9 h-9 rounded-full border border-neutral-800 object-cover group-hover:border-neutral-500 transition-colors"
+                      />
+                    ) : (
+                      <div className="w-9 h-9 rounded-full bg-neutral-900 border border-neutral-800 flex items-center justify-center font-bold text-white text-xs group-hover:border-neutral-500 transition-colors">
+                        {details?.uploader?.[0] || "Y"}
+                      </div>
                     )}
-                  </div>
+                    <div>
+                      <h2 className="font-semibold text-xs text-white group-hover:underline">
+                        {details?.uploader || "YouTube Channel"}
+                      </h2>
+                      {details?.uploadDate && (
+                        <div className="text-[11px] text-neutral-500 font-mono">{details.uploadDate}</div>
+                      )}
+                    </div>
+                  </Link>
 
                   {/* Mark / Unmark Channel Button */}
                   {channelId && (
@@ -530,7 +553,7 @@ export default function WatchPage({ params }: PageProps) {
                                 <p className="text-xs text-neutral-300 leading-relaxed whitespace-pre-wrap">
                                   {comment.content}
                                 </p>
-                                {comment.likeCount > 0 && (
+                                {(comment.likeCount ?? 0) > 0 && (
                                   <div className="flex items-center gap-1.5 mt-2 text-[10px] text-neutral-500 font-mono">
                                     <ThumbsUp className="w-3 h-3 text-neutral-600" />
                                     <span>{comment.likeCount}</span>

@@ -4,40 +4,35 @@ import type {
     SavedVideo,
     WatchedVideo,
     LocalPlaylist,
+    ChannelPreference,
 } from "@/types/library";
 
-/**
- * RawTube Database Engine
- * Pure client-side IndexedDB wrapper using Dexie.js.
- * All user data lives strictly in the browser sandbox.
- */
 class RawTubeDatabase extends Dexie {
     channels!: EntityTable<MarkedChannel, "channelId">;
     savedVideos!: EntityTable<SavedVideo, "videoId">;
     watchedVideos!: EntityTable<WatchedVideo, "videoId">;
     playlists!: EntityTable<LocalPlaylist, "id">;
+    preferences!: EntityTable<ChannelPreference, "channelId">;
 
     constructor() {
         super("RawTubeDB");
 
-        // Version 1 Schema
-        // Keys defined here are indexed for high-speed sorting and queries
         this.version(1).stores({
             channels: "channelId, markedAt",
             savedVideos: "videoId, savedAt",
             watchedVideos: "videoId, watchedAt",
             playlists: "id, createdAt",
         });
+
+        this.version(2).stores({
+            preferences: "channelId, preference, updatedAt",
+        });
     }
 }
 
-// Singleton database instance
 export const db = new RawTubeDatabase();
 
-// 1. Watch Later (Saved Videos) Operations
-
 export async function saveVideo(video: SavedVideo): Promise<void> {
-    // .put() inserts or updates existing, bumping savedAt timestamp to the top
     await db.savedVideos.put({
         ...video,
         savedAt: Date.now(),
@@ -52,8 +47,6 @@ export async function isVideoSaved(videoId: string): Promise<boolean> {
     const item = await db.savedVideos.get(videoId);
     return Boolean(item);
 }
-
-// 2. Channel Subscription Operations
 
 export async function markChannel(channel: MarkedChannel): Promise<void> {
     await db.channels.put({
@@ -71,29 +64,55 @@ export async function isChannelMarked(channelId: string): Promise<boolean> {
     return Boolean(item);
 }
 
-
-// 3. Playback History & Progress Tracking
-
 export async function recordWatchProgress(
     videoId: string,
     progressSeconds: number,
     durationSeconds?: number,
     channelTitle?: string,
-    channelId?: string
+    channelId?: string,
+    title?: string
 ): Promise<void> {
+    const existing = await db.watchedVideos.get(videoId);
     await db.watchedVideos.put({
         videoId,
         watchedAt: Date.now(),
         progressSeconds,
-        durationSeconds,
-        channelTitle,
-        channelId,
+        durationSeconds: durationSeconds ?? existing?.durationSeconds,
+        channelTitle: channelTitle ?? existing?.channelTitle,
+        channelId: channelId ?? existing?.channelId,
+        title: title ?? existing?.title,
     });
 }
 
+export async function removeWatchedVideo(videoId: string): Promise<void> {
+    await db.watchedVideos.delete(videoId);
+}
 
-// 4. Privacy Control: Burner Wipe
+export async function clearWatchedHistory(): Promise<void> {
+    await db.watchedVideos.clear();
+}
 
+export async function setChannelPreference(
+    channelId: string,
+    channelTitle: string,
+    preference: "interested" | "not_interested"
+): Promise<void> {
+    await db.preferences.put({
+        channelId,
+        channelTitle,
+        preference,
+        updatedAt: Date.now(),
+    });
+}
+
+export async function removeChannelPreference(channelId: string): Promise<void> {
+    await db.preferences.delete(channelId);
+}
+
+export async function getChannelPreference(channelId: string): Promise<"interested" | "not_interested" | null> {
+    const item = await db.preferences.get(channelId);
+    return item ? item.preference : null;
+}
 
 export async function clearAllLocalData(): Promise<void> {
     await Promise.all([
@@ -101,5 +120,6 @@ export async function clearAllLocalData(): Promise<void> {
         db.savedVideos.clear(),
         db.watchedVideos.clear(),
         db.playlists.clear(),
+        db.preferences.clear(),
     ]);
 }

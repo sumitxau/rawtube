@@ -8,33 +8,31 @@ import {
   Search,
   RefreshCw,
   Plus,
-  Check,
   X,
   ArrowDownCircle,
   EyeOff,
   Settings2,
-  Trash2,
   Shuffle,
   Zap,
+  RotateCcw,
+  Clock,
+  Keyboard,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Loader } from "@/components/ui/loader";
 import { useLibrary } from "@/hooks/use-library";
-import { fetchChannelUploads, searchVideosPage } from "@/lib/api/client";
+import { searchVideosPage } from "@/lib/api/client";
 import { VideoCard } from "@/components/video/video-card";
 import {
   DIRECTORY_CATEGORIES,
   getChannelsByCategory,
   interleaveAndShuffle,
   shuffleVideos,
-  type DirectoryCategory,
-  type CuratedChannel,
 } from "@/lib/directory/channels";
 import {
   getRecommendedChannelsForMyFeed,
   getWatchStatsSummary,
-  type CreatorAffinity,
   type WatchStatsSummary,
 } from "@/lib/recommendation/engine";
 import type { VideoMetadata } from "@/types/library";
@@ -47,6 +45,8 @@ export default function HomePage() {
     isReady,
     savedVideos,
     watchedVideos,
+    preferences,
+    removeChannelPreference,
     clearAllLocalData,
   } = useLibrary();
 
@@ -63,14 +63,54 @@ export default function HomePage() {
 
   const [focusMode, setFocusMode] = useState(false);
   const [showChannelModal, setShowChannelModal] = useState(false);
+  const [showShortcutsModal, setShowShortcutsModal] = useState(false);
   const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
 
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [savedApiKey, setSavedApiKey] = useState(false);
+
+  const searchInputRef = useRef<HTMLInputElement | null>(null);
   const observerRef = useRef<IntersectionObserver | null>(null);
   const loadMoreTriggerRef = useRef<HTMLDivElement | null>(null);
 
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("rawtube_yt_api_key");
+      if (stored) {
+        queueMicrotask(() => {
+          setApiKeyInput(stored);
+        });
+      }
+    }
+  }, []);
+
+  const handleSaveApiKey = () => {
+    if (typeof window !== "undefined") {
+      if (apiKeyInput.trim()) {
+        localStorage.setItem("rawtube_yt_api_key", apiKeyInput.trim());
+      } else {
+        localStorage.removeItem("rawtube_yt_api_key");
+      }
+      setSavedApiKey(true);
+      setTimeout(() => setSavedApiKey(false), 2000);
+      loadCategoryFeed();
+    }
+  };
+
   const watchStats: WatchStatsSummary = useMemo(() => {
-    return getWatchStatsSummary(watchedVideos);
-  }, [watchedVideos]);
+    return getWatchStatsSummary(watchedVideos, preferences);
+  }, [watchedVideos, preferences]);
+
+  const notInterestedSet = useMemo(() => {
+    const s = new Set<string>();
+    for (const p of preferences) {
+      if (p.preference === "not_interested") {
+        if (p.channelId) s.add(p.channelId);
+        if (p.channelTitle) s.add(p.channelTitle.toLowerCase());
+      }
+    }
+    return s;
+  }, [preferences]);
 
   const categoryChannels = useMemo(() => {
     return getChannelsByCategory(activeTab);
@@ -82,57 +122,56 @@ export default function HomePage() {
 
     try {
       if (activeTab === "my-feed") {
-        const recResult = getRecommendedChannelsForMyFeed(watchedVideos, markedChannels);
-        const channelsToFetch = recResult.channels.slice(0, 6);
+        const rec = getRecommendedChannelsForMyFeed(watchedVideos, markedChannels, preferences);
+        const topChannels = rec.channels.slice(0, 4);
 
-        const results = await Promise.allSettled(
-          channelsToFetch.map((ch) => fetchChannelUploads(ch.id))
-        );
+        const queries = topChannels.length > 0
+          ? topChannels.map((c) => `${c.name} engineering`)
+          : ["harkirat full stack web3", "solidity rust chai aur code piyush garg"];
 
+        const results = await Promise.allSettled(queries.map((q) => searchVideosPage(q)));
         const all: VideoMetadata[] = [];
         for (const res of results) {
-          if (res.status === "fulfilled") all.push(...res.value);
-        }
-
-        if (all.length < 8) {
-          const fallbackQuery =
-            recResult.topAffinities.length > 0
-              ? `${recResult.topAffinities[0].channelTitle} tech`
-              : "solidity rust full stack web development";
-          const searchFallback = await searchVideosPage(fallbackQuery);
-          all.push(...searchFallback.videos);
+          if (res.status === "fulfilled") all.push(...res.value.videos);
         }
 
         const seen = new Set<string>();
         const unique = all.filter((v) => {
           if (seen.has(v.id)) return false;
+          if (notInterestedSet.has(v.channelId) || notInterestedSet.has(v.channelName.toLowerCase())) return false;
+          seen.add(v.id);
+          return true;
+        });
+
+        setVideos(interleaveAndShuffle(unique));
+      } else if (activeTab === "all") {
+        const [indiaRes, web3Res] = await Promise.allSettled([
+          searchVideosPage("harkirat chai aur code piyush garg akshay saini striver kunal kushwaha"),
+          searchVideosPage("solidity rust smart contract security primeagen fireship theo t3"),
+        ]);
+
+        const all: VideoMetadata[] = [];
+        if (indiaRes.status === "fulfilled") all.push(...indiaRes.value.videos);
+        if (web3Res.status === "fulfilled") all.push(...web3Res.value.videos);
+
+        const seen = new Set<string>();
+        const unique = all.filter((v) => {
+          if (seen.has(v.id)) return false;
+          if (notInterestedSet.has(v.channelId) || notInterestedSet.has(v.channelName.toLowerCase())) return false;
           seen.add(v.id);
           return true;
         });
 
         setVideos(interleaveAndShuffle(unique));
       } else {
-        const channelsToFetch = categoryChannels.slice(0, 8);
-        const results = await Promise.allSettled(
-          channelsToFetch.map((ch) => fetchChannelUploads(ch.id))
-        );
-
-        const all: VideoMetadata[] = [];
-        for (const res of results) {
-          if (res.status === "fulfilled") all.push(...res.value);
-        }
-
-        if (all.length < 8) {
-          const cat = DIRECTORY_CATEGORIES.find((c) => c.id === activeTab);
-          if (cat) {
-            const searchFallback = await searchVideosPage(cat.seedQuery);
-            all.push(...searchFallback.videos);
-          }
-        }
+        const cat = DIRECTORY_CATEGORIES.find((c) => c.id === activeTab);
+        const query = cat ? cat.seedQuery : "technology software engineering";
+        const result = await searchVideosPage(query);
 
         const seen = new Set<string>();
-        const unique = all.filter((v) => {
+        const unique = result.videos.filter((v) => {
           if (seen.has(v.id)) return false;
+          if (notInterestedSet.has(v.channelId) || notInterestedSet.has(v.channelName.toLowerCase())) return false;
           seen.add(v.id);
           return true;
         });
@@ -144,7 +183,7 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
-  }, [activeTab, markedChannels, watchedVideos, categoryChannels]);
+  }, [activeTab, markedChannels, watchedVideos, preferences, notInterestedSet]);
 
   useEffect(() => {
     if (isReady) {
@@ -152,11 +191,61 @@ export default function HomePage() {
     }
   }, [isReady, activeTab, loadCategoryFeed]);
 
-  const handleShuffle = () => {
+  const handleShuffle = useCallback(() => {
     setShuffling(true);
     setVideos((prev) => interleaveAndShuffle(shuffleVideos(prev)));
-    setTimeout(() => setShuffling(false), 350);
-  };
+    setTimeout(() => setShuffling(false), 300);
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const activeEl = document.activeElement;
+      const isInput =
+        activeEl instanceof HTMLInputElement ||
+        activeEl instanceof HTMLTextAreaElement ||
+        (activeEl && (activeEl as HTMLElement).isContentEditable);
+
+      if (e.key === "Escape") {
+        if (showShortcutsModal) {
+          setShowShortcutsModal(false);
+          return;
+        }
+        if (showChannelModal) {
+          setShowChannelModal(false);
+          return;
+        }
+        if (isInput) {
+          (activeEl as HTMLElement).blur();
+          return;
+        }
+        if (searchQuery) {
+          setSearchQuery("");
+          setSearchResults([]);
+          setSearchNextPage(undefined);
+          return;
+        }
+      }
+
+      if (isInput) return;
+
+      if (e.key === "/") {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      } else if (e.key === "s" || e.key === "S") {
+        e.preventDefault();
+        handleShuffle();
+      } else if (e.key === "f" || e.key === "F") {
+        e.preventDefault();
+        setFocusMode((prev) => !prev);
+      } else if (e.key === "?") {
+        e.preventDefault();
+        setShowShortcutsModal((prev) => !prev);
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showShortcutsModal, showChannelModal, searchQuery, handleShuffle]);
 
   const handleSearch = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -168,7 +257,11 @@ export default function HomePage() {
 
     try {
       const result = await searchVideosPage(searchQuery.trim());
-      setSearchResults(result.videos);
+      setSearchResults(
+        result.videos.filter(
+          (v) => !notInterestedSet.has(v.channelId) && !notInterestedSet.has(v.channelName.toLowerCase())
+        )
+      );
       setSearchNextPage(result.nextpage);
     } catch (err) {
       console.error("Search failed:", err);
@@ -183,14 +276,17 @@ export default function HomePage() {
     setLoadingMore(true);
     try {
       const result = await searchVideosPage(searchQuery.trim(), searchNextPage);
-      setSearchResults((prev) => [...prev, ...result.videos]);
+      const filtered = result.videos.filter(
+        (v) => !notInterestedSet.has(v.channelId) && !notInterestedSet.has(v.channelName.toLowerCase())
+      );
+      setSearchResults((prev) => [...prev, ...filtered]);
       setSearchNextPage(result.nextpage);
     } catch (err) {
       console.error("Load more search failed:", err);
     } finally {
       setLoadingMore(false);
     }
-  }, [searchNextPage, loadingMore, searching, searchQuery]);
+  }, [searchNextPage, loadingMore, searching, searchQuery, notInterestedSet]);
 
   useEffect(() => {
     if (!loadMoreTriggerRef.current) return;
@@ -221,6 +317,10 @@ export default function HomePage() {
     }
   };
 
+  const hiddenChannelsList = useMemo(() => {
+    return preferences.filter((p) => p.preference === "not_interested");
+  }, [preferences]);
+
   return (
     <div className="relative min-h-screen bg-[#0e0f12] text-neutral-100 flex flex-col font-sans selection:bg-neutral-800 selection:text-white overflow-x-hidden">
       <div className="fixed inset-0 pointer-events-none z-0">
@@ -229,8 +329,19 @@ export default function HomePage() {
 
       <header className="sticky top-0 z-40 bg-[#0e0f12]/90 backdrop-blur-md border-b border-neutral-800/80 px-4 sm:px-6 lg:px-10 py-3.5 transition-colors">
         <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-          <Link href="/" className="flex items-center shrink-0">
-            <span className="font-black text-sm tracking-[0.25em] text-white hover:text-neutral-300 transition-colors uppercase select-none">
+          <Link
+            href="/"
+            onClick={() => {
+              setSearchQuery("");
+              setSearchResults([]);
+              setSearchNextPage(undefined);
+              setActiveTab("all");
+              setFocusMode(false);
+            }}
+            className="flex items-center shrink-0 group cursor-pointer"
+            title="Reset to Home Feed"
+          >
+            <span className="font-black text-sm tracking-[0.25em] text-white group-hover:text-neutral-300 transition-colors uppercase select-none">
               RAWTUBE
             </span>
           </Link>
@@ -239,10 +350,11 @@ export default function HomePage() {
             <div className="relative flex items-center">
               <Search className="w-3.5 h-3.5 text-neutral-500 absolute left-3.5 pointer-events-none" />
               <input
+                ref={searchInputRef}
                 type="text"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search tech channels, research papers, topics..."
+                placeholder="Search tech channels, research papers, topics... (/ to focus)"
                 className="w-full pl-9 pr-14 py-2 text-xs rounded-lg bg-[#16171b] border border-neutral-800 focus:outline-none focus:border-neutral-500 text-white placeholder:text-neutral-500 transition-all font-normal"
               />
               {searchQuery && (
@@ -255,12 +367,12 @@ export default function HomePage() {
                 </button>
               )}
               <span className="absolute right-2.5 text-[9px] font-mono text-neutral-500 bg-neutral-900 px-1 py-0.5 rounded border border-neutral-800 pointer-events-none">
-                ↵
+                /
               </span>
             </div>
           </form>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5">
             <Button
               variant={focusMode ? "secondary" : "ghost"}
               size="sm"
@@ -270,6 +382,7 @@ export default function HomePage() {
                   ? "bg-neutral-800 text-white border border-neutral-700"
                   : "text-neutral-400 hover:text-white hover:bg-neutral-900"
               }`}
+              title="Toggle Focus Mode (F)"
             >
               <EyeOff className="w-3.5 h-3.5" />
               <span className="hidden sm:inline">{focusMode ? "Focus: ON" : "Focus"}</span>
@@ -280,10 +393,10 @@ export default function HomePage() {
               size="sm"
               onClick={() => setShowChannelModal(true)}
               className="text-neutral-400 hover:text-white hover:bg-neutral-900 rounded-lg gap-1.5 text-xs h-8 px-2.5 font-medium"
-              title="My Subscriptions"
+              title="Subscriptions & Preferences"
             >
               <Settings2 className="w-3.5 h-3.5" />
-              <span className="hidden md:inline">Subscriptions ({markedChannels.length})</span>
+              <span className="hidden md:inline">Settings</span>
             </Button>
 
             <Button
@@ -292,7 +405,7 @@ export default function HomePage() {
               onClick={handleShuffle}
               disabled={loading || videos.length === 0}
               className="text-neutral-400 hover:text-white hover:bg-neutral-900 rounded-lg gap-1.5 text-xs h-8 px-2 font-medium"
-              title="Shuffle"
+              title="Shuffle (S)"
             >
               <Shuffle className={`w-3.5 h-3.5 ${shuffling ? "animate-spin text-white" : ""}`} />
             </Button>
@@ -307,6 +420,33 @@ export default function HomePage() {
             >
               <RefreshCw className={`w-3.5 h-3.5 ${loading ? "animate-spin text-white" : ""}`} />
             </Button>
+
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setShowShortcutsModal(true)}
+              className="text-neutral-400 hover:text-white hover:bg-neutral-900 rounded-lg gap-1.5 text-xs h-8 px-2 font-medium"
+              title="Keyboard Shortcuts (?)"
+            >
+              <Keyboard className="w-3.5 h-3.5" />
+            </Button>
+
+            <Link href="/history">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="text-neutral-400 hover:text-white hover:bg-neutral-900 rounded-lg gap-1.5 text-xs h-8 px-2.5 font-medium"
+                title="Watch History"
+              >
+                <Clock className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">History</span>
+                {watchedVideos.length > 0 && (
+                  <span className="px-1.5 py-0.2 bg-neutral-900 text-neutral-400 rounded text-[10px] font-mono border border-neutral-800">
+                    {watchedVideos.length}
+                  </span>
+                )}
+              </Button>
+            </Link>
 
             <Link href="/watch-later">
               <Button
@@ -461,8 +601,8 @@ export default function HomePage() {
                     </div>
                     <p className="text-xs text-neutral-400 mt-1">
                       {watchStats.isColdStart
-                        ? "Seeded with Web3 & authentic Indian engineering creators. Automatically tunes as you watch."
-                        : `Tuned by ${watchStats.totalVideosWatched} watched videos (${watchStats.totalMinutesWatched} min total watch time on device).`}
+                        ? "Seeded with Web3 & authentic Indian engineering creators. Automatically tunes as you watch and mark interested."
+                        : `Tuned by ${watchStats.totalVideosWatched} watched videos (${watchStats.totalMinutesWatched} min) · ${watchStats.interestedCount} boosted · ${watchStats.hiddenCount} hidden.`}
                     </p>
                   </div>
 
@@ -485,15 +625,17 @@ export default function HomePage() {
                   <div className="pt-2 border-t border-neutral-800/60 flex flex-wrap items-center gap-2 text-xs">
                     <span className="text-neutral-500 font-mono text-[11px]">Top Affinities:</span>
                     {watchStats.topCreators.map((creator) => (
-                      <span
+                      <Link
                         key={creator.name}
-                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-neutral-900 border border-neutral-800 text-neutral-300 text-[11px] font-medium"
+                        href={`/channel/${encodeURIComponent(creator.name)}`}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-neutral-900 border border-neutral-800 text-neutral-300 hover:text-white hover:border-neutral-600 transition-colors text-[11px] font-medium"
+                        title={`Open channel: ${creator.name}`}
                       >
                         <span>{creator.name}</span>
                         <span className="text-[10px] text-neutral-500 font-mono">
                           {creator.minutes}m
                         </span>
-                      </span>
+                      </Link>
                     ))}
                   </div>
                 )}
@@ -561,7 +703,12 @@ export default function HomePage() {
                       )}
                     </AnimatePresence>
 
-                    <VideoCard video={video} />
+                    <VideoCard
+                      video={video}
+                      onHide={(hiddenId) => {
+                        setVideos((prev) => prev.filter((v) => v.channelId !== hiddenId && v.channelName !== hiddenId));
+                      }}
+                    />
                   </div>
                 ))}
               </div>
@@ -579,7 +726,7 @@ export default function HomePage() {
           <div className="bg-[#16171b] border border-neutral-800 rounded-xl max-w-md w-full p-6 shadow-2xl">
             <div className="flex items-center justify-between pb-4 border-b border-neutral-800 mb-4">
               <h2 className="text-xs font-bold tracking-wider uppercase text-white font-mono">
-                My Subscriptions ({markedChannels.length})
+                Settings & Preferences
               </h2>
               <button
                 onClick={() => setShowChannelModal(false)}
@@ -589,31 +736,93 @@ export default function HomePage() {
               </button>
             </div>
 
-            {markedChannels.length === 0 ? (
-              <p className="text-xs text-neutral-500 py-6 text-center font-mono">
-                No channels subscribed yet. Browse categories and click Follow All!
+            <div className="mb-5 pb-4 border-b border-neutral-800">
+              <label className="text-[11px] font-mono text-neutral-400 block mb-1">
+                Optional YouTube Data API v3 Key (Ultra-Fast 50ms)
+              </label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="password"
+                  value={apiKeyInput}
+                  onChange={(e) => setApiKeyInput(e.target.value)}
+                  placeholder="AIzaSy..."
+                  className="flex-1 bg-black border border-neutral-800 rounded-md px-3 py-1.5 text-xs text-white placeholder:text-neutral-600 focus:outline-none focus:border-neutral-500 font-mono"
+                />
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleSaveApiKey}
+                  className="h-8 text-xs bg-black border-neutral-800 hover:bg-neutral-900 text-white rounded-md px-3"
+                >
+                  {savedApiKey ? "Saved" : "Save"}
+                </Button>
+              </div>
+              <p className="text-[10px] text-neutral-500 mt-1">
+                Leave blank to use decentralized Piped proxy. Stored strictly in your browser.
               </p>
-            ) : (
-              <div className="flex flex-col gap-2 max-h-80 overflow-y-auto pr-1">
-                {markedChannels.map((ch) => (
-                  <div
-                    key={ch.channelId}
-                    className="flex items-center justify-between p-3 rounded-lg bg-black border border-neutral-800/80"
-                  >
-                    <span className="font-medium text-xs text-white truncate mr-2">
-                      {ch.channelTitle}
-                    </span>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => unmarkChannel(ch.channelId)}
-                      className="text-neutral-400 hover:text-white hover:bg-neutral-900 h-7 px-2 text-xs gap-1"
+            </div>
+
+            <div className="mb-4">
+              <h3 className="text-xs font-mono text-neutral-400 mb-2">
+                Subscribed Channels ({markedChannels.length})
+              </h3>
+              {markedChannels.length === 0 ? (
+                <p className="text-xs text-neutral-600 py-2 font-mono">No channels subscribed.</p>
+              ) : (
+                <div className="flex flex-col gap-1.5 max-h-36 overflow-y-auto pr-1">
+                  {markedChannels.map((ch) => (
+                    <div
+                      key={ch.channelId}
+                      className="flex items-center justify-between p-2 rounded-md bg-black border border-neutral-800/80"
                     >
-                      <Trash2 className="w-3 h-3" />
-                      <span>Remove</span>
-                    </Button>
-                  </div>
-                ))}
+                      <Link
+                        href={`/channel/${encodeURIComponent(ch.channelId || ch.channelTitle)}`}
+                        onClick={() => setShowChannelModal(false)}
+                        className="font-medium text-xs text-white hover:underline truncate mr-2"
+                        title={`View channel: ${ch.channelTitle}`}
+                      >
+                        {ch.channelTitle}
+                      </Link>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => unmarkChannel(ch.channelId)}
+                        className="text-neutral-400 hover:text-white hover:bg-neutral-900 h-6 px-1.5 text-[11px]"
+                      >
+                        Remove
+                      </Button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {hiddenChannelsList.length > 0 && (
+              <div className="mb-4">
+                <h3 className="text-xs font-mono text-neutral-400 mb-2">
+                  Hidden / Not Interested Channels ({hiddenChannelsList.length})
+                </h3>
+                <div className="flex flex-col gap-1.5 max-h-36 overflow-y-auto pr-1">
+                  {hiddenChannelsList.map((p) => (
+                    <div
+                      key={p.channelId}
+                      className="flex items-center justify-between p-2 rounded-md bg-black border border-neutral-800/80"
+                    >
+                      <span className="font-medium text-xs text-neutral-400 truncate mr-2">
+                        {p.channelTitle}
+                      </span>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => removeChannelPreference(p.channelId)}
+                        className="text-neutral-400 hover:text-white hover:bg-neutral-900 h-6 px-2 text-[11px] gap-1"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>Unhide</span>
+                      </Button>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -622,7 +831,7 @@ export default function HomePage() {
                 variant="ghost"
                 size="sm"
                 onClick={async () => {
-                  if (confirm("Wipe all local subscriptions and watch history from this device?")) {
+                  if (confirm("Wipe all local subscriptions, preferences, and watch history?")) {
                     await clearAllLocalData();
                     setShowChannelModal(false);
                   }
@@ -645,11 +854,65 @@ export default function HomePage() {
         </div>
       )}
 
+      {showShortcutsModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-in fade-in">
+          <div className="w-full max-w-sm rounded-xl border border-neutral-800 bg-[#121316] p-5 shadow-2xl text-left">
+            <div className="flex items-center justify-between pb-3 border-b border-neutral-800/80 mb-4">
+              <div className="flex items-center gap-2">
+                <Keyboard className="w-4 h-4 text-white" />
+                <h3 className="text-sm font-semibold text-white tracking-tight">Keyboard Shortcuts</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowShortcutsModal(false)}
+                className="text-neutral-500 hover:text-white p-1 rounded transition-colors"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="space-y-2 text-xs">
+              <div className="flex items-center justify-between py-1.5 px-2.5 rounded bg-[#18191e] border border-neutral-800/60">
+                <span className="text-neutral-300 font-medium">Focus Search Bar</span>
+                <kbd className="px-2 py-0.5 rounded bg-black border border-neutral-700 font-mono text-[11px] text-neutral-300">/</kbd>
+              </div>
+              <div className="flex items-center justify-between py-1.5 px-2.5 rounded bg-[#18191e] border border-neutral-800/60">
+                <span className="text-neutral-300 font-medium">Shuffle Current Feed</span>
+                <kbd className="px-2 py-0.5 rounded bg-black border border-neutral-700 font-mono text-[11px] text-neutral-300">s</kbd>
+              </div>
+              <div className="flex items-center justify-between py-1.5 px-2.5 rounded bg-[#18191e] border border-neutral-800/60">
+                <span className="text-neutral-300 font-medium">Toggle Focus Mode</span>
+                <kbd className="px-2 py-0.5 rounded bg-black border border-neutral-700 font-mono text-[11px] text-neutral-300">f</kbd>
+              </div>
+              <div className="flex items-center justify-between py-1.5 px-2.5 rounded bg-[#18191e] border border-neutral-800/60">
+                <span className="text-neutral-300 font-medium">Toggle Shortcuts Cheat Sheet</span>
+                <kbd className="px-2 py-0.5 rounded bg-black border border-neutral-700 font-mono text-[11px] text-neutral-300">?</kbd>
+              </div>
+              <div className="flex items-center justify-between py-1.5 px-2.5 rounded bg-[#18191e] border border-neutral-800/60">
+                <span className="text-neutral-300 font-medium">Dismiss Modals / Clear Search</span>
+                <kbd className="px-2 py-0.5 rounded bg-black border border-neutral-700 font-mono text-[11px] text-neutral-300">Esc</kbd>
+              </div>
+            </div>
+
+            <div className="mt-5 pt-3 border-t border-neutral-800 flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowShortcutsModal(false)}
+                className="text-xs bg-black border-neutral-800 text-white rounded-md px-3 h-7"
+              >
+                Got it
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <footer className="mt-auto border-t border-neutral-800/60 py-4 px-6 text-center text-xs text-neutral-500 bg-[#0e0f12]">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 font-mono text-[11px]">
           <span>RAWTUBE · LOCAL-FIRST INTELLIGENCE</span>
           <span>
-            {markedChannels.length} Channels Followed · {savedVideos.length} Saved · {watchedVideos.length} Watched
+            {markedChannels.length} Followed · {savedVideos.length} Saved · {watchedVideos.length} Watched
           </span>
         </div>
       </footer>

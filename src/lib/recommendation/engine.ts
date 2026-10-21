@@ -1,5 +1,5 @@
-import type { WatchedVideo, MarkedChannel, VideoMetadata } from "@/types/library";
-import { CURATED_CHANNELS, type CuratedChannel, interleaveAndShuffle, shuffleVideos } from "@/lib/directory/channels";
+import type { WatchedVideo, MarkedChannel, ChannelPreference } from "@/types/library";
+import { CURATED_CHANNELS, type CuratedChannel } from "@/lib/directory/channels";
 
 export interface CreatorAffinity {
   channelId: string;
@@ -8,6 +8,7 @@ export interface CreatorAffinity {
   totalSecondsWatched: number;
   score: number;
   isSubscribed: boolean;
+  preference?: "interested" | "not_interested";
 }
 
 export interface WatchStatsSummary {
@@ -15,18 +16,30 @@ export interface WatchStatsSummary {
   totalMinutesWatched: number;
   topCreators: { name: string; minutes: number; count: number }[];
   isColdStart: boolean;
+  interestedCount: number;
+  hiddenCount: number;
 }
 
 export function computeCreatorAffinity(
   watchedVideos: WatchedVideo[],
-  markedChannels: MarkedChannel[]
+  markedChannels: MarkedChannel[],
+  preferences: ChannelPreference[] = []
 ): CreatorAffinity[] {
   const map = new Map<string, CreatorAffinity>();
   const subscribedIds = new Set(markedChannels.map((c) => c.channelId));
+  const prefMap = new Map<string, "interested" | "not_interested">();
+
+  for (const p of preferences) {
+    if (p.channelId) prefMap.set(p.channelId, p.preference);
+    if (p.channelTitle) prefMap.set(p.channelTitle.toLowerCase(), p.preference);
+  }
 
   for (const item of watchedVideos) {
     const key = item.channelId || item.channelTitle || "unknown";
     if (key === "unknown") continue;
+
+    const pref = prefMap.get(item.channelId || "") || prefMap.get((item.channelTitle || "").toLowerCase());
+    if (pref === "not_interested") continue;
 
     const existing = map.get(key) || {
       channelId: item.channelId || "",
@@ -35,6 +48,7 @@ export function computeCreatorAffinity(
       totalSecondsWatched: 0,
       score: 0,
       isSubscribed: subscribedIds.has(item.channelId || ""),
+      preference: pref,
     };
 
     existing.watchCount += 1;
@@ -44,20 +58,41 @@ export function computeCreatorAffinity(
     const recencyMultiplier = isRecent ? 1.5 : 1.0;
 
     const watchTimeWeight = Math.min(existing.totalSecondsWatched / 20, 300);
-    existing.score = (existing.watchCount * 25 + watchTimeWeight + (existing.isSubscribed ? 60 : 0)) * recencyMultiplier;
+    const prefBoost = existing.preference === "interested" ? 150 : 0;
+    existing.score =
+      (existing.watchCount * 25 + watchTimeWeight + (existing.isSubscribed ? 60 : 0) + prefBoost) *
+      recencyMultiplier;
 
     map.set(key, existing);
   }
 
   for (const ch of markedChannels) {
+    const pref = prefMap.get(ch.channelId) || prefMap.get(ch.channelTitle.toLowerCase());
+    if (pref === "not_interested") continue;
+
     if (!map.has(ch.channelId)) {
       map.set(ch.channelId, {
         channelId: ch.channelId,
         channelTitle: ch.channelTitle,
         watchCount: 0,
         totalSecondsWatched: 0,
-        score: 50,
+        score: pref === "interested" ? 200 : 50,
         isSubscribed: true,
+        preference: pref,
+      });
+    }
+  }
+
+  for (const p of preferences) {
+    if (p.preference === "interested" && !map.has(p.channelId)) {
+      map.set(p.channelId, {
+        channelId: p.channelId,
+        channelTitle: p.channelTitle,
+        watchCount: 0,
+        totalSecondsWatched: 0,
+        score: 150,
+        isSubscribed: subscribedIds.has(p.channelId),
+        preference: "interested",
       });
     }
   }
@@ -67,9 +102,21 @@ export function computeCreatorAffinity(
 
 export function getRecommendedChannelsForMyFeed(
   watchedVideos: WatchedVideo[],
-  markedChannels: MarkedChannel[]
+  markedChannels: MarkedChannel[],
+  preferences: ChannelPreference[] = []
 ): { channels: CuratedChannel[]; isColdStart: boolean; topAffinities: CreatorAffinity[] } {
-  const affinities = computeCreatorAffinity(watchedVideos, markedChannels);
+  const notInterestedNames = new Set(
+    preferences
+      .filter((p) => p.preference === "not_interested")
+      .map((p) => p.channelTitle.toLowerCase())
+  );
+  const notInterestedIds = new Set(
+    preferences
+      .filter((p) => p.preference === "not_interested")
+      .map((p) => p.channelId)
+  );
+
+  const affinities = computeCreatorAffinity(watchedVideos, markedChannels, preferences);
 
   if (affinities.length > 0) {
     const matchedChannels: CuratedChannel[] = [];
@@ -77,6 +124,7 @@ export function getRecommendedChannelsForMyFeed(
 
     for (const aff of affinities) {
       if (seenIds.has(aff.channelId)) continue;
+      if (notInterestedIds.has(aff.channelId) || notInterestedNames.has(aff.channelTitle.toLowerCase())) continue;
 
       const found = CURATED_CHANNELS.find((c) => c.id === aff.channelId);
       if (found) {
@@ -110,7 +158,9 @@ export function getRecommendedChannelsForMyFeed(
     CURATED_CHANNELS.find((c) => c.name === "Piyush Garg")!,
     CURATED_CHANNELS.find((c) => c.name === "Akshay Saini")!,
     CURATED_CHANNELS.find((c) => c.name.includes("ThePrimeagen"))!,
-  ].filter(Boolean);
+  ]
+    .filter(Boolean)
+    .filter((c) => !notInterestedIds.has(c.id) && !notInterestedNames.has(c.name.toLowerCase()));
 
   return {
     channels: defaultSeeds,
@@ -119,7 +169,10 @@ export function getRecommendedChannelsForMyFeed(
   };
 }
 
-export function getWatchStatsSummary(watchedVideos: WatchedVideo[]): WatchStatsSummary {
+export function getWatchStatsSummary(
+  watchedVideos: WatchedVideo[],
+  preferences: ChannelPreference[] = []
+): WatchStatsSummary {
   const totalVideosWatched = watchedVideos.length;
   let totalSeconds = 0;
   const creatorSeconds = new Map<string, { seconds: number; count: number }>();
@@ -144,10 +197,15 @@ export function getWatchStatsSummary(watchedVideos: WatchedVideo[]): WatchStatsS
     .sort((a, b) => b.minutes - a.minutes)
     .slice(0, 4);
 
+  const interestedCount = preferences.filter((p) => p.preference === "interested").length;
+  const hiddenCount = preferences.filter((p) => p.preference === "not_interested").length;
+
   return {
     totalVideosWatched,
     totalMinutesWatched: Math.round(totalSeconds / 60),
     topCreators,
-    isColdStart: totalVideosWatched < 2,
+    isColdStart: totalVideosWatched < 2 && interestedCount === 0,
+    interestedCount,
+    hiddenCount,
   };
 }

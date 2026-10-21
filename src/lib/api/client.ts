@@ -1,25 +1,36 @@
 import type { VideoMetadata } from "@/types/library";
 
-/**
- * Piped API Client
- * Decentralized YouTube metadata proxy without Google API keys.
- * Includes automatic instance fallback if one public mirror goes down.
- */
-
-// List of public Piped instances to try in sequence (tested & active)
 export const PIPED_INSTANCES = [
     "https://pipedapi.ducks.party",
-    "https://piped-api.garudalinux.org",
-    "https://api.piped.projectsegfau.lt",
-    "https://pipedapi.kavin.rocks",
+    "https://pipedapi-libre.kavin.rocks",
 ];
 
-const DEFAULT_TIMEOUT_MS = 8000; // 8 second timeout per request
+const DEFAULT_TIMEOUT_MS = 2500;
+const queryCache = new Map<string, { data: unknown; expiry: number }>();
 
-/**
- * Fetch wrapper with timeout and automatic instance fallback
- */
+function getCached<T>(key: string): T | null {
+    const item = queryCache.get(key);
+    if (item && item.expiry > Date.now()) {
+        return item.data as T;
+    }
+    return null;
+}
+
+function setCached(key: string, data: unknown, ttl = 300000): void {
+    queryCache.set(key, { data, expiry: Date.now() + ttl });
+}
+
+function getApiKey(): string | null {
+    if (typeof window !== "undefined") {
+        return localStorage.getItem("rawtube_yt_api_key") || process.env.NEXT_PUBLIC_YOUTUBE_API_KEY || null;
+    }
+    return process.env.NEXT_PUBLIC_YOUTUBE_API_KEY || null;
+}
+
 export async function apiGet<T>(path: string, customInstance?: string): Promise<T> {
+    const cached = getCached<T>(path);
+    if (cached) return cached;
+
     const instances = customInstance ? [customInstance, ...PIPED_INSTANCES] : PIPED_INSTANCES;
     let lastError: Error | null = null;
 
@@ -41,18 +52,17 @@ export async function apiGet<T>(path: string, customInstance?: string): Promise<
             clearTimeout(timeoutId);
 
             if (response.ok) {
-                return (await response.json()) as T;
+                const json = (await response.json()) as T;
+                setCached(path, json);
+                return json;
             }
         } catch (err) {
-            // Instance failed or timed out — silently advance to next mirror
             lastError = err instanceof Error ? err : new Error("Network request failed");
         }
     }
 
-    throw new Error(`All Piped instances failed. Last error: ${lastError?.message}`);
+    throw new Error(`Instances failed: ${lastError?.message}`);
 }
-
-// 1. Channel Uploads (Home Feed Generator)
 
 export interface PipedChannelResponse {
     id: string;
@@ -71,29 +81,96 @@ export interface PipedChannelResponse {
     }>;
 }
 
-export async function fetchChannelUploads(channelId: string): Promise<VideoMetadata[]> {
-    const data = await apiGet<PipedChannelResponse>(`/channel/${channelId}`);
+export async function fetchChannelUploads(channelId: string, channelName?: string): Promise<VideoMetadata[]> {
+    const cacheKey = `uploads_${channelId}`;
+    const cached = getCached<VideoMetadata[]>(cacheKey);
+    if (cached) return cached;
 
-    if (!data.relatedStreams) return [];
+    try {
+        const data = await apiGet<PipedChannelResponse>(`/channel/${channelId}`);
+        if (data.relatedStreams && data.relatedStreams.length > 0) {
+            const list: VideoMetadata[] = data.relatedStreams.map((stream) => {
+                const videoId = stream.url.replace("/watch?v=", "");
+                return {
+                    id: videoId,
+                    title: stream.title,
+                    channelName: stream.uploaderName || data.name,
+                    channelId,
+                    thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                    duration: stream.duration,
+                    uploadedDate: stream.uploadedDate,
+                    views: stream.views,
+                };
+            });
+            setCached(cacheKey, list);
+            return list;
+        }
+    } catch {
+        // channel endpoint fallback
+    }
 
-    return data.relatedStreams.map((stream) => {
+    if (channelName) {
+        const search = await searchVideosPage(channelName);
+        const list = search.videos.slice(0, 6);
+        setCached(cacheKey, list);
+        return list;
+    }
 
-        const videoId = stream.url.replace("/watch?v=", "");
-        return {
-            id: videoId,
-            title: stream.title,
-            channelName: stream.uploaderName || data.name,
-            channelId: channelId,
-            thumbnailUrl: stream.thumbnail,
-            duration: stream.duration,
-            uploadedDate: stream.uploadedDate,
-            views: stream.views,
-        };
-    });
+    return [];
 }
 
+export interface ChannelPageData {
+    id: string;
+    name: string;
+    avatarUrl?: string;
+    bannerUrl?: string;
+    description?: string;
+    subscriberCount?: number;
+    videos: VideoMetadata[];
+    nextpage?: string;
+}
 
-// 2. Video Details (Watch Page)
+export async function fetchChannelPage(idOrName: string): Promise<ChannelPageData> {
+    const decoded = decodeURIComponent(idOrName);
+    const isChannelId = decoded.startsWith("UC");
+
+    if (isChannelId) {
+        try {
+            const data = await apiGet<PipedChannelResponse>(`/channel/${decoded}`);
+            if (data && data.relatedStreams) {
+                const videos: VideoMetadata[] = data.relatedStreams.map((stream) => {
+                    const videoId = stream.url.replace("/watch?v=", "");
+                    return {
+                        id: videoId,
+                        title: stream.title,
+                        channelName: stream.uploaderName || data.name,
+                        channelId: decoded,
+                        thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                        duration: stream.duration,
+                        uploadedDate: stream.uploadedDate,
+                        views: stream.views,
+                    };
+                });
+                return {
+                    id: decoded,
+                    name: data.name || decoded,
+                    avatarUrl: data.avatarUrl,
+                    videos,
+                };
+            }
+        } catch {
+            // fallback
+        }
+    }
+
+    const searchRes = await searchVideosPage(decoded);
+    return {
+        id: decoded,
+        name: decoded,
+        videos: searchRes.videos,
+        nextpage: searchRes.nextpage,
+    };
+}
 
 export interface PipedStreamResponse {
     title: string;
@@ -109,59 +186,92 @@ export interface PipedStreamResponse {
 
 export async function fetchVideoDetails(videoId: string): Promise<PipedStreamResponse> {
     try {
-        return await apiGet<PipedStreamResponse>(`/streams/${videoId}`);
-    } catch (err) {
-        try {
-            const oembedRes = await fetch(
-                `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
-            );
-            if (oembedRes.ok) {
-                const data = await oembedRes.json();
-                return {
-                    title: data.title || "Video",
-                    description: "",
-                    uploadDate: "Recently Uploaded",
-                    uploader: data.author_name || "YouTube Channel",
-                    uploaderUrl: data.author_url || "",
-                    uploaderAvatar: "",
-                    thumbnailUrl: data.thumbnail_url || `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-                    views: 0,
-                    likes: 0,
-                };
-            }
-        } catch {
-            // ignore oembed error and throw original error
+        const data = await apiGet<PipedStreamResponse>(`/streams/${videoId}`);
+        if (data && data.title) {
+            return {
+                ...data,
+                thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+            };
         }
-        throw err;
+    } catch {
+        // stream fallback
     }
+
+    try {
+        const oembedRes = await fetch(
+            `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
+        );
+        if (oembedRes.ok) {
+            const data = await oembedRes.json();
+            return {
+                title: data.title || "Video",
+                description: "",
+                uploadDate: "Recently Uploaded",
+                uploader: data.author_name || "YouTube Channel",
+                uploaderUrl: data.author_url || "",
+                uploaderAvatar: "",
+                thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                views: 0,
+                likes: 0,
+            };
+        }
+    } catch {
+        // oembed fallback
+    }
+
+    return {
+        title: "Video",
+        description: "",
+        uploadDate: "",
+        uploader: "YouTube Channel",
+        uploaderUrl: "",
+        uploaderAvatar: "",
+        thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+        views: 0,
+        likes: 0,
+    };
 }
 
-// 2.5 Comments API
 export interface PipedComment {
+    commentId: string;
     author: string;
-    authorAvatar: string;
+    authorAvatar?: string;
+    authorThumbnail?: string;
     content: string;
-    commentedTime: string;
-    likeCount: number;
+    commentText?: string;
+    commentedTime?: string;
+    likeCount?: number;
+}
+
+interface RawPipedComment {
+    commentId?: string;
+    author?: string;
+    thumbnail?: string;
+    authorAvatar?: string;
+    content?: string;
+    commentText?: string;
+    commentedTime?: string;
+    likeCount?: number;
 }
 
 export async function fetchVideoComments(videoId: string): Promise<PipedComment[]> {
     try {
-        const data = await apiGet<{ comments?: Array<any> }>(`/comments/${videoId}`);
+        const data = await apiGet<{ comments?: Array<RawPipedComment> }>(`/comments/${videoId}`);
         if (!data.comments) return [];
         return data.comments.map((c) => ({
+            commentId: c.commentId || String(Math.random()),
             author: c.author || "Anonymous",
-            authorAvatar: c.authorAvatar || "",
+            authorAvatar: c.thumbnail || c.authorAvatar || "",
+            authorThumbnail: c.thumbnail,
             content: c.commentText || c.content || "",
-            commentedTime: c.commentedTime || "",
-            likeCount: c.likeCount || c.likes || 0,
+            commentText: c.commentText || c.content || "",
+            commentedTime: c.commentedTime,
+            likeCount: typeof c.likeCount === "number" ? c.likeCount : 0,
         }));
     } catch {
         return [];
     }
 }
-
-// 3. Search (Channels and Videos) with Endless Pagination Support
 
 export interface SearchPageResult {
     videos: VideoMetadata[];
@@ -172,31 +282,85 @@ export async function searchVideosPage(
     query: string,
     nextpage?: string
 ): Promise<SearchPageResult> {
+    const cacheKey = `search_${query}_${nextpage || ""}`;
+    const cached = getCached<SearchPageResult>(cacheKey);
+    if (cached) return cached;
+
+    const apiKey = getApiKey();
+    if (apiKey && !nextpage) {
+        try {
+            const ytUrl = `https://www.googleapis.com/youtube/v3/search?part=snippet&q=${encodeURIComponent(query)}&type=video&maxResults=25&key=${apiKey}`;
+            const res = await fetch(ytUrl);
+            if (res.ok) {
+                interface YouTubeItem {
+                    id: { videoId: string };
+                    snippet: {
+                        title: string;
+                        channelTitle: string;
+                        channelId: string;
+                        publishedAt?: string;
+                    };
+                }
+                const data = (await res.json()) as { items?: YouTubeItem[]; nextPageToken?: string };
+                const videos: VideoMetadata[] = (data.items || []).map((item: YouTubeItem) => ({
+                    id: item.id.videoId,
+                    title: item.snippet.title,
+                    channelName: item.snippet.channelTitle,
+                    channelId: item.snippet.channelId,
+                    thumbnailUrl: `https://i.ytimg.com/vi/${item.id.videoId}/hqdefault.jpg`,
+                    uploadedDate: item.snippet.publishedAt ? new Date(item.snippet.publishedAt).toLocaleDateString() : "",
+                    views: 0,
+                }));
+                const result = { videos, nextpage: data.nextPageToken };
+                setCached(cacheKey, result);
+                return result;
+            }
+        } catch {
+            // yt api fallback
+        }
+    }
+
     const path = nextpage
         ? `/nextpage/search?nextpage=${encodeURIComponent(nextpage)}&q=${encodeURIComponent(query)}&filter=videos`
         : `/search?q=${encodeURIComponent(query)}&filter=videos`;
 
-    const data = await apiGet<{ items?: Array<any>; nextpage?: string }>(path);
+    try {
+        interface PipedItem {
+            type?: string;
+            url: string;
+            title: string;
+            uploaderName?: string;
+            uploader?: string;
+            uploaderUrl?: string;
+            uploadedDate?: string;
+            views?: number;
+            duration?: number;
+        }
+        const data = await apiGet<{ items?: Array<PipedItem>; nextpage?: string }>(path);
+        if (!data.items) return { videos: [], nextpage: undefined };
 
-    if (!data.items) return { videos: [], nextpage: undefined };
+        const videos: VideoMetadata[] = data.items
+            .filter((item) => item.type === "stream")
+            .map((item) => {
+                const videoId = item.url.replace("/watch?v=", "");
+                return {
+                    id: videoId,
+                    title: item.title,
+                    channelName: item.uploaderName || item.uploader || "Unknown Channel",
+                    channelId: item.uploaderUrl ? item.uploaderUrl.replace("/channel/", "") : "",
+                    thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
+                    duration: item.duration,
+                    uploadedDate: item.uploadedDate,
+                    views: item.views,
+                };
+            });
 
-    const videos: VideoMetadata[] = data.items
-        .filter((item) => item.type === "stream")
-        .map((item) => ({
-            id: item.url.replace("/watch?v=", ""),
-            title: item.title,
-            channelName: item.uploaderName || item.uploader || "Unknown Channel",
-            channelId: item.uploaderUrl ? item.uploaderUrl.replace("/channel/", "") : "",
-            thumbnailUrl: item.thumbnail,
-            duration: item.duration,
-            uploadedDate: item.uploadedDate,
-            views: item.views,
-        }));
-
-    return {
-        videos,
-        nextpage: data.nextpage,
-    };
+        const result = { videos, nextpage: data.nextpage };
+        setCached(cacheKey, result);
+        return result;
+    } catch {
+        return { videos: [], nextpage: undefined };
+    }
 }
 
 export async function searchVideos(query: string): Promise<VideoMetadata[]> {
