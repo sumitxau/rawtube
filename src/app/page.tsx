@@ -21,6 +21,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Loader } from "@/components/ui/loader";
+import { Logo } from "@/components/ui/logo";
 import { useLibrary } from "@/hooks/use-library";
 import { searchVideosPage } from "@/lib/api/client";
 import { VideoCard } from "@/components/video/video-card";
@@ -338,9 +339,10 @@ export default function HomePage() {
               setActiveTab("all");
               setFocusMode(false);
             }}
-            className="flex items-center shrink-0 group cursor-pointer"
+            className="flex items-center gap-2 shrink-0 group cursor-pointer"
             title="Reset to Home Feed"
           >
+            <Logo size={20} />
             <span className="font-black text-sm tracking-[0.25em] text-white group-hover:text-neutral-300 transition-colors uppercase select-none">
               RAWTUBE
             </span>

@@ -20,6 +20,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Loader } from "@/components/ui/loader";
+import { Logo } from "@/components/ui/logo";
 import { useLibrary } from "@/hooks/use-library";
 import {
   fetchVideoDetails,
@@ -241,7 +242,8 @@ function WatchContent({ params }: PageProps) {
             <span>Feed</span>
           </Link>
 
-          <Link href="/" className="flex items-center">
+          <Link href="/" className="flex items-center gap-2 group">
+            <Logo size={20} />
             <span className="font-black text-sm tracking-[0.25em] text-white hover:text-neutral-300 transition-colors uppercase select-none">
               RAWTUBE
             </span>

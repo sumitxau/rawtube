@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, Clock, Trash2, Play, Search, X } from "lucide-react";
 import { useLibrary } from "@/hooks/use-library";
 import { Button } from "@/components/ui/button";
+import { Logo } from "@/components/ui/logo";
 
 function formatSeconds(seconds?: number): string {
   if (!seconds || isNaN(seconds) || seconds <= 0) return "0:00";
@@ -62,7 +63,8 @@ export default function HistoryPage() {
             <span>Feed</span>
           </Link>
 
-          <Link href="/" className="flex items-center">
+          <Link href="/" className="flex items-center gap-2 group">
+            <Logo size={20} />
             <span className="font-black text-sm tracking-[0.25em] text-white hover:text-neutral-300 transition-colors uppercase select-none">
               RAWTUBE
             </span>

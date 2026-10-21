@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, Bookmark, Check, Plus, RefreshCw, ThumbsUp, ThumbsDown, ArrowDownCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Loader } from "@/components/ui/loader";
+import { Logo } from "@/components/ui/logo";
 import { VideoCard } from "@/components/video/video-card";
 import { useLibrary } from "@/hooks/use-library";
 import { fetchChannelPage, searchVideosPage, type ChannelPageData } from "@/lib/api/client";
@@ -181,7 +182,8 @@ function ChannelContent({ params }: PageProps) {
             <span>Feed</span>
           </Link>
 
-          <Link href="/" className="flex items-center">
+          <Link href="/" className="flex items-center gap-2 group">
+            <Logo size={20} />
             <span className="font-black text-sm tracking-[0.25em] text-white hover:text-neutral-300 transition-colors uppercase select-none">
               RAWTUBE
             </span>

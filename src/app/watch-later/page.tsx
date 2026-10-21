@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowLeft, Bookmark, Trash2, Play } from "lucide-react";
 import { useLibrary } from "@/hooks/use-library";
 import { Button } from "@/components/ui/button";
+import { Logo } from "@/components/ui/logo";
 
 function formatDuration(seconds?: number): string {
   if (!seconds || isNaN(seconds) || seconds <= 0) return "";
@@ -55,7 +56,8 @@ export default function WatchLaterPage() {
             <span>Feed</span>
           </Link>
 
-          <Link href="/" className="flex items-center">
+          <Link href="/" className="flex items-center gap-2 group">
+            <Logo size={20} />
             <span className="font-black text-sm tracking-[0.25em] text-white hover:text-neutral-300 transition-colors uppercase select-none">
               RAWTUBE
             </span>
