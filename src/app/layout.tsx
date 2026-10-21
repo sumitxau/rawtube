@@ -13,7 +13,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "RawTube — Own Your Feed. Zero Doomscroll.",
+  title: "RawTube — Own Your Feed.",
   description: "Take back control. A distraction-free, local-first video explorer with zero algorithmic traps, no tracking, and zero doomscrolling.",
   icons: {
     icon: "/logo.png",

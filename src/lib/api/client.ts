@@ -1,11 +1,11 @@
 import type { VideoMetadata } from "@/types/library";
 
 export const PIPED_INSTANCES = [
+    "https://api.piped.private.coffee",
     "https://pipedapi.ducks.party",
-    "https://pipedapi-libre.kavin.rocks",
 ];
 
-const DEFAULT_TIMEOUT_MS = 2500;
+const DEFAULT_TIMEOUT_MS = 3000;
 const queryCache = new Map<string, { data: unknown; expiry: number }>();
 
 function getCached<T>(key: string): T | null {
@@ -13,11 +13,33 @@ function getCached<T>(key: string): T | null {
     if (item && item.expiry > Date.now()) {
         return item.data as T;
     }
+    if (typeof window !== "undefined") {
+        try {
+            const raw = sessionStorage.getItem(`rt_cache_${key}`);
+            if (raw) {
+                const parsed = JSON.parse(raw);
+                if (parsed.expiry > Date.now()) {
+                    queryCache.set(key, parsed);
+                    return parsed.data as T;
+                }
+            }
+        } catch {
+            // ignore storage errors
+        }
+    }
     return null;
 }
 
-function setCached(key: string, data: unknown, ttl = 300000): void {
-    queryCache.set(key, { data, expiry: Date.now() + ttl });
+function setCached(key: string, data: unknown, ttl = 600000): void {
+    const entry = { data, expiry: Date.now() + ttl };
+    queryCache.set(key, entry);
+    if (typeof window !== "undefined") {
+        try {
+            sessionStorage.setItem(`rt_cache_${key}`, JSON.stringify(entry));
+        } catch {
+            // ignore quota errors
+        }
+    }
 }
 
 function getApiKey(): string | null {
@@ -32,36 +54,49 @@ export async function apiGet<T>(path: string, customInstance?: string): Promise<
     if (cached) return cached;
 
     const instances = customInstance ? [customInstance, ...PIPED_INSTANCES] : PIPED_INSTANCES;
-    let lastError: Error | null = null;
 
-    for (const instance of instances) {
-        const cleanBase = instance.replace(/\/+$/, "");
+    const fetchSingle = async (base: string): Promise<T> => {
+        const cleanBase = base.replace(/\/+$/, "");
         const url = `${cleanBase}${path}`;
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
 
         try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
-
             const response = await fetch(url, {
                 signal: controller.signal,
-                headers: {
-                    Accept: "application/json",
-                },
+                headers: { Accept: "application/json" },
             });
-
             clearTimeout(timeoutId);
 
-            if (response.ok) {
-                const json = (await response.json()) as T;
-                setCached(path, json);
-                return json;
+            if (!response.ok) {
+                throw new Error(`HTTP ${response.status}`);
             }
+
+            const json = (await response.json()) as T;
+            setCached(path, json);
+            return json;
         } catch (err) {
-            lastError = err instanceof Error ? err : new Error("Network request failed");
+            clearTimeout(timeoutId);
+            throw err instanceof Error ? err : new Error("Request failed");
         }
+    };
+
+    if (instances.length === 1) {
+        return fetchSingle(instances[0]);
     }
 
-    throw new Error(`Instances failed: ${lastError?.message}`);
+    // Staggered race: Try primary instance first; if it takes > 750ms, fire backup in parallel
+    try {
+        const primaryPromise = fetchSingle(instances[0]);
+        const backupTrigger = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error("Stagger trigger")), 750)
+        );
+
+        return await Promise.race([primaryPromise, backupTrigger]);
+    } catch {
+        // If primary timed out past 750ms or errored, race all instances concurrently
+        return await Promise.any(instances.map((inst) => fetchSingle(inst)));
+    }
 }
 
 export interface PipedChannelResponse {

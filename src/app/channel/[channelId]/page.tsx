@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState, useCallback, useRef, Suspense } from "react";
+import { use, useEffect, useState, useCallback, useRef, useMemo, Suspense } from "react";
 import Link from "next/link";
 import { ArrowLeft, Bookmark, Check, Plus, RefreshCw, ThumbsUp, ThumbsDown, ArrowDownCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -63,6 +63,16 @@ function ChannelContent({ params }: PageProps) {
   const currentPref = preferences.find(
     (p) => p.channelId === channelKey || p.channelTitle.toLowerCase() === channelName.toLowerCase()
   )?.preference;
+
+  const savedIdSet = useMemo(() => new Set(savedVideos.map((v) => v.videoId)), [savedVideos]);
+  const prefMap = useMemo(() => {
+    const m = new Map<string, "interested" | "not_interested">();
+    for (const p of preferences) {
+      if (p.channelId) m.set(p.channelId, p.preference);
+      if (p.channelTitle) m.set(p.channelTitle.toLowerCase(), p.preference);
+    }
+    return m;
+  }, [preferences]);
 
   const loadChannel = useCallback(async () => {
     setLoading(true);
@@ -325,7 +335,12 @@ function ChannelContent({ params }: PageProps) {
           <div>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {videos.map((video) => (
-                <VideoCard key={video.id} video={video} />
+                <VideoCard
+                  key={video.id}
+                  video={video}
+                  isSaved={savedIdSet.has(video.id)}
+                  preference={prefMap.get(video.channelId) || prefMap.get(video.channelName.toLowerCase())}
+                />
               ))}
             </div>
 

@@ -55,6 +55,11 @@ export default function HomePage() {
   const [videos, setVideos] = useState<VideoMetadata[]>([]);
   const [loading, setLoading] = useState(false);
   const [shuffling, setShuffling] = useState(false);
+  const [feedNextPage, setFeedNextPage] = useState<string | undefined>(undefined);
+  const [feedPage, setFeedPage] = useState<number>(0);
+  const [loadingMoreFeed, setLoadingMoreFeed] = useState<boolean>(false);
+  const feedObserverRef = useRef<IntersectionObserver | null>(null);
+  const feedLoadMoreTriggerRef = useRef<HTMLDivElement | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<VideoMetadata[]>([]);
@@ -113,6 +118,17 @@ export default function HomePage() {
     return s;
   }, [preferences]);
 
+  const savedIdSet = useMemo(() => new Set(savedVideos.map((v) => v.videoId)), [savedVideos]);
+  const watchedIdSet = useMemo(() => new Set(watchedVideos.map((v) => v.videoId)), [watchedVideos]);
+  const prefMap = useMemo(() => {
+    const m = new Map<string, "interested" | "not_interested">();
+    for (const p of preferences) {
+      if (p.channelId) m.set(p.channelId, p.preference);
+      if (p.channelTitle) m.set(p.channelTitle.toLowerCase(), p.preference);
+    }
+    return m;
+  }, [preferences]);
+
   const categoryChannels = useMemo(() => {
     return getChannelsByCategory(activeTab);
   }, [activeTab]);
@@ -120,24 +136,22 @@ export default function HomePage() {
   const loadCategoryFeed = useCallback(async () => {
     setLoading(true);
     setVideos([]);
+    setFeedPage(0);
+    setFeedNextPage(undefined);
 
     try {
       if (activeTab === "my-feed") {
         const rec = getRecommendedChannelsForMyFeed(watchedVideos, markedChannels, preferences);
-        const topChannels = rec.channels.slice(0, 4);
+        const topChannels = rec.channels.slice(0, 2);
 
-        const queries = topChannels.length > 0
-          ? topChannels.map((c) => `${c.name} engineering`)
-          : ["harkirat full stack web3", "solidity rust chai aur code piyush garg"];
+        const query = topChannels.length > 0
+          ? `${topChannels[0].name} ${topChannels[1]?.name || ""}`.trim()
+          : "software engineering web3 rust";
 
-        const results = await Promise.allSettled(queries.map((q) => searchVideosPage(q)));
-        const all: VideoMetadata[] = [];
-        for (const res of results) {
-          if (res.status === "fulfilled") all.push(...res.value.videos);
-        }
+        const result = await searchVideosPage(query);
 
         const seen = new Set<string>();
-        const unique = all.filter((v) => {
+        const unique = result.videos.filter((v) => {
           if (seen.has(v.id)) return false;
           if (notInterestedSet.has(v.channelId) || notInterestedSet.has(v.channelName.toLowerCase())) return false;
           seen.add(v.id);
@@ -145,18 +159,14 @@ export default function HomePage() {
         });
 
         setVideos(interleaveAndShuffle(unique));
+        setFeedNextPage(result.nextpage);
       } else if (activeTab === "all") {
-        const [indiaRes, web3Res] = await Promise.allSettled([
-          searchVideosPage("harkirat chai aur code piyush garg akshay saini striver kunal kushwaha"),
-          searchVideosPage("solidity rust smart contract security primeagen fireship theo t3"),
-        ]);
-
-        const all: VideoMetadata[] = [];
-        if (indiaRes.status === "fulfilled") all.push(...indiaRes.value.videos);
-        if (web3Res.status === "fulfilled") all.push(...web3Res.value.videos);
+        const cat = DIRECTORY_CATEGORIES.find((c) => c.id === "all");
+        const query = cat ? cat.seedQuery : "software engineering web development";
+        const result = await searchVideosPage(query);
 
         const seen = new Set<string>();
-        const unique = all.filter((v) => {
+        const unique = result.videos.filter((v) => {
           if (seen.has(v.id)) return false;
           if (notInterestedSet.has(v.channelId) || notInterestedSet.has(v.channelName.toLowerCase())) return false;
           seen.add(v.id);
@@ -164,6 +174,7 @@ export default function HomePage() {
         });
 
         setVideos(interleaveAndShuffle(unique));
+        setFeedNextPage(result.nextpage);
       } else {
         const cat = DIRECTORY_CATEGORIES.find((c) => c.id === activeTab);
         const query = cat ? cat.seedQuery : "technology software engineering";
@@ -178,6 +189,7 @@ export default function HomePage() {
         });
 
         setVideos(interleaveAndShuffle(unique));
+        setFeedNextPage(result.nextpage);
       }
     } catch (err) {
       console.error("Feed error:", err);
@@ -191,6 +203,113 @@ export default function HomePage() {
       loadCategoryFeed();
     }
   }, [isReady, activeTab, loadCategoryFeed]);
+
+  const loadMoreFeed = useCallback(async () => {
+    if (loadingMoreFeed || loading) return;
+    setLoadingMoreFeed(true);
+
+    try {
+      const newVideos: VideoMetadata[] = [];
+      let nextToken: string | undefined = undefined;
+
+      if (activeTab === "my-feed") {
+        const rec = getRecommendedChannelsForMyFeed(watchedVideos, markedChannels, preferences);
+        const offset = (feedPage + 1) * 3;
+        const channels = rec.channels.slice(offset, offset + 3);
+
+        if (channels.length > 0) {
+          const results = await Promise.allSettled(
+            channels.map((c) => searchVideosPage(`${c.name} engineering`))
+          );
+          for (const res of results) {
+            if (res.status === "fulfilled") newVideos.push(...res.value.videos);
+          }
+        } else {
+          const res = await searchVideosPage("software engineering rust typescript web3", feedNextPage);
+          newVideos.push(...res.videos);
+          nextToken = res.nextpage;
+        }
+      } else if (activeTab === "all") {
+        const topics = [
+          "typescript react nextjs system design performance",
+          "linux internals kubernetes devops docker",
+          "llm architecture ai research agents karpathy",
+          "reverse engineering cybersecurity liveoverflow",
+          "computer architecture chip design embedded electronics",
+          "startups technical founder saas indie hacker",
+        ];
+        const nextTopic = topics[feedPage % topics.length];
+        const res = await searchVideosPage(nextTopic, feedNextPage);
+        newVideos.push(...res.videos);
+        nextToken = res.nextpage;
+      } else {
+        const cat = DIRECTORY_CATEGORIES.find((c) => c.id === activeTab);
+        const catChannels = getChannelsByCategory(activeTab);
+
+        if (feedNextPage) {
+          const query = cat ? cat.seedQuery : "technology software engineering";
+          const res = await searchVideosPage(query, feedNextPage);
+          newVideos.push(...res.videos);
+          nextToken = res.nextpage;
+        } else if (catChannels.length > 0) {
+          const ch = catChannels[(feedPage + 1) % catChannels.length];
+          const query = `${ch.name} ${cat?.seedQuery || ""}`;
+          const res = await searchVideosPage(query);
+          newVideos.push(...res.videos);
+          nextToken = res.nextpage;
+        }
+      }
+
+      setFeedPage((prev) => prev + 1);
+      setFeedNextPage(nextToken);
+
+      if (newVideos.length > 0) {
+        setVideos((prev) => {
+          const existingIds = new Set(prev.map((v) => v.id));
+          const filtered = newVideos.filter(
+            (v) =>
+              !existingIds.has(v.id) &&
+              !notInterestedSet.has(v.channelId) &&
+              !notInterestedSet.has(v.channelName.toLowerCase())
+          );
+          return [...prev, ...filtered];
+        });
+      }
+    } catch (err) {
+      console.error("Endless scroll feed load failed:", err);
+    } finally {
+      setLoadingMoreFeed(false);
+    }
+  }, [
+    loadingMoreFeed,
+    loading,
+    activeTab,
+    feedPage,
+    feedNextPage,
+    watchedVideos,
+    markedChannels,
+    preferences,
+    notInterestedSet,
+  ]);
+
+  useEffect(() => {
+    if (!feedLoadMoreTriggerRef.current) return;
+    if (feedObserverRef.current) feedObserverRef.current.disconnect();
+
+    feedObserverRef.current = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && !loadingMoreFeed && !loading && !focusMode && !searchQuery) {
+          loadMoreFeed();
+        }
+      },
+      { threshold: 0.1 }
+    );
+
+    feedObserverRef.current.observe(feedLoadMoreTriggerRef.current);
+    return () => {
+      if (feedObserverRef.current) feedObserverRef.current.disconnect();
+    };
+  }, [loadingMoreFeed, loading, focusMode, searchQuery, loadMoreFeed]);
 
   const handleShuffle = useCallback(() => {
     setShuffling(true);
@@ -501,7 +620,13 @@ export default function HomePage() {
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
               {searchResults.map((video) => (
-                <VideoCard key={video.id} video={video} />
+                <VideoCard
+                  key={video.id}
+                  video={video}
+                  isSaved={savedIdSet.has(video.id)}
+                  isWatched={watchedIdSet.has(video.id)}
+                  preference={prefMap.get(video.channelId) || prefMap.get(video.channelName.toLowerCase())}
+                />
               ))}
             </div>
 
@@ -685,35 +810,82 @@ export default function HomePage() {
                 <Loader size={100} />
               </div>
             ) : videos.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                {videos.map((video, idx) => (
-                  <div
-                    key={video.id}
-                    className="relative group block p-0.5"
-                    onMouseEnter={() => setHoveredIndex(idx)}
-                    onMouseLeave={() => setHoveredIndex(null)}
-                  >
-                    <AnimatePresence>
-                      {hoveredIndex === idx && (
-                        <motion.span
-                          className="absolute inset-0 h-full w-full bg-neutral-900/60 block rounded-xl -z-10"
-                          layoutId="hoverBackground"
-                          initial={{ opacity: 0 }}
-                          animate={{ opacity: 1, transition: { duration: 0.15 } }}
-                          exit={{ opacity: 0, transition: { duration: 0.15, delay: 0.05 } }}
-                        />
-                      )}
-                    </AnimatePresence>
+              <>
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                  {videos
+                    .filter(
+                      (v) =>
+                        prefMap.get(v.channelId) !== "not_interested" &&
+                        prefMap.get(v.channelName.toLowerCase()) !== "not_interested"
+                    )
+                    .map((video, idx) => (
+                      <div
+                        key={video.id}
+                        className="relative group block p-0.5"
+                        onMouseEnter={() => setHoveredIndex(idx)}
+                        onMouseLeave={() => setHoveredIndex(null)}
+                      >
+                        <AnimatePresence>
+                          {hoveredIndex === idx && (
+                            <motion.span
+                              className="absolute inset-0 h-full w-full bg-neutral-900/60 block rounded-xl -z-10"
+                              layoutId="hoverBackground"
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1, transition: { duration: 0.15 } }}
+                              exit={{ opacity: 0, transition: { duration: 0.15, delay: 0.05 } }}
+                            />
+                          )}
+                        </AnimatePresence>
 
-                    <VideoCard
-                      video={video}
-                      onHide={(hiddenId) => {
-                        setVideos((prev) => prev.filter((v) => v.channelId !== hiddenId && v.channelName !== hiddenId));
-                      }}
-                    />
-                  </div>
-                ))}
-              </div>
+                        <VideoCard
+                          video={video}
+                          isSaved={savedIdSet.has(video.id)}
+                          isWatched={watchedIdSet.has(video.id)}
+                          preference={prefMap.get(video.channelId) || prefMap.get(video.channelName.toLowerCase())}
+                          onHide={(hiddenId) => {
+                            setVideos((prev) => prev.filter((v) => v.channelId !== hiddenId && v.channelName !== hiddenId));
+                          }}
+                        />
+                      </div>
+                    ))}
+
+                  {loadingMoreFeed && (
+                    <>
+                      {[...Array(4)].map((_, i) => (
+                        <div
+                          key={`feed-skeleton-${i}`}
+                          className="rounded-xl overflow-hidden bg-[#141519] border border-neutral-800/60 animate-pulse flex flex-col"
+                        >
+                          <div className="aspect-video w-full bg-neutral-900/90" />
+                          <div className="p-3.5 space-y-2.5">
+                            <div className="h-3 bg-neutral-800/90 rounded w-4/5" />
+                            <div className="h-2.5 bg-neutral-800/60 rounded w-1/2" />
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+
+                {/* Endless Scroll Trigger */}
+                <div ref={feedLoadMoreTriggerRef} className="flex items-center justify-center py-10 mt-6">
+                  {loadingMoreFeed ? (
+                    <div className="flex items-center gap-2 text-xs text-neutral-400 font-medium bg-[#16171b] border border-neutral-800 px-4 py-2 rounded-lg">
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin text-violet-400" />
+                      <span>Loading more videos...</span>
+                    </div>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      onClick={loadMoreFeed}
+                      className="gap-2 text-xs bg-[#16171b] border-neutral-800 hover:bg-neutral-800 text-white font-medium px-4 py-2 rounded-lg"
+                    >
+                      <ArrowDownCircle className="w-3.5 h-3.5 text-neutral-400" />
+                      <span>Load More</span>
+                    </Button>
+                  )}
+                </div>
+              </>
             ) : (
               <div className="py-20 text-center text-neutral-500 text-xs max-w-sm mx-auto">
                 <p>No recent uploads found. Refresh or try another category.</p>

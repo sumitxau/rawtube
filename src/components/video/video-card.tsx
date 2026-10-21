@@ -1,14 +1,20 @@
-"use client";
-
 import { useState } from "react";
 import Link from "next/link";
 import { Bookmark, BookmarkCheck, CheckCircle2, ThumbsUp, ThumbsDown } from "lucide-react";
-import { useLibrary } from "@/hooks/use-library";
+import {
+  saveVideo,
+  removeSavedVideo,
+  setChannelPreference,
+  removeChannelPreference,
+} from "@/lib/db/database";
 import type { VideoMetadata } from "@/types/library";
 
 interface VideoCardProps {
   video: VideoMetadata;
   onHide?: (channelId: string) => void;
+  isSaved?: boolean;
+  isWatched?: boolean;
+  preference?: "interested" | "not_interested";
 }
 
 function formatDuration(seconds?: number): string {
@@ -34,26 +40,17 @@ function formatViews(views?: number): string {
   return `${views} views`;
 }
 
-export function VideoCard({ video, onHide }: VideoCardProps) {
-  const {
-    savedVideos,
-    watchedVideos,
-    preferences,
-    saveVideo,
-    removeSavedVideo,
-    setChannelPreference,
-    removeChannelPreference,
-  } = useLibrary();
-
+export function VideoCard({
+  video,
+  onHide,
+  isSaved = false,
+  isWatched = false,
+  preference,
+}: VideoCardProps) {
   const [hidden, setHidden] = useState(false);
 
-  const isSaved = savedVideos.some((v) => v.videoId === video.id);
-  const isWatched = watchedVideos.some((v) => v.videoId === video.id);
-
   const channelKey = video.channelId || video.channelName;
-  const currentPref = preferences.find(
-    (p) => p.channelId === channelKey || p.channelTitle.toLowerCase() === video.channelName.toLowerCase()
-  )?.preference;
+  const currentPref = preference;
 
   const handleToggleBookmark = async (e: React.MouseEvent) => {
     e.preventDefault();
